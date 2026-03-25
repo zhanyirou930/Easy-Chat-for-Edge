@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "EasyChat for Edge",
+  "version": "2.1.0",
+  "description": "Easy AI Chat - Support 200+ AI Models with Full Features",
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "EasyChat for Edge",
+    "default_popup": "popup.html"
+  },
+  "side_panel": {
+    "default_path": "sidebar.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
