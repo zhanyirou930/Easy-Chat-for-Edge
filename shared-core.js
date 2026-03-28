@@ -1,5 +1,13 @@
 (function (global) {
-  const DISPLAY_TAG_ICONS = ['💻', '✏️', '📄', '📌'];
+  const DISPLAY_TAG_ICONS = ['💬', '💻', '✏️', '📄', '📌'];
+  const SOURCE_KIND_ICONS = {
+    selection: '💻',
+    page: '📄',
+    screenshot: '📸',
+    image: '🖼️',
+    file: '📎',
+    web_search: '🌐'
+  };
 
   function previewText(text, maxLen) {
     return (text || '').replace(/\s+/g, ' ').trim().slice(0, maxLen || 120);
@@ -14,6 +22,16 @@
       out[key] = value;
     });
     return out;
+  }
+
+  function escapeHtml(text) {
+    return String(text || '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[ch]));
   }
 
   function normalizeBaseUrl(baseUrl) {
@@ -86,6 +104,23 @@
     return compactObject({ kind, ...(data || {}) });
   }
 
+  function dedupeContextSources(sources) {
+    const seen = new Set();
+    return (sources || []).filter(source => {
+      const key = JSON.stringify([
+        source?.kind || '',
+        source?.label || '',
+        source?.name || '',
+        source?.url || '',
+        source?.title || '',
+        source?.preview || ''
+      ]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
   function buildContextSources(options) {
     const opts = options || {};
     const sources = [];
@@ -111,13 +146,125 @@
       }));
     });
 
-    if (opts.webSearchEnabled) {
+    (opts.webSearchSources || []).forEach(source => {
+      if (source) sources.push(source);
+    });
+
+    if (opts.webSearchEnabled && !(opts.webSearchSources || []).length) {
       sources.push(createContextSource('web_search', {
         label: opts.webSearchLabel || '联网搜索'
       }));
     }
 
     return sources;
+  }
+
+  function getMessageContextSources(message) {
+    return dedupeContextSources(message?.meta?.contextSources || []);
+  }
+
+  function findLastUserMessage(messages) {
+    for (let i = (messages?.length || 0) - 1; i >= 0; i--) {
+      if (messages[i]?.role === 'user') return messages[i];
+    }
+    return null;
+  }
+
+  function resolveTurnContext(messages, options) {
+    const opts = options || {};
+    const lastUserMessage = opts.lastUserMessage || findLastUserMessage(messages);
+    const contextSources = getMessageContextSources(lastUserMessage).filter(source => {
+      if (source.kind !== 'web_search') return true;
+      return !!opts.includeWebSearch;
+    });
+    return compactObject({
+      lastUserMessage,
+      contextAction: lastUserMessage?.meta?.contextAction,
+      contextLabel: lastUserMessage?.meta?.contextLabel,
+      contextSources,
+      requestedWebSearch: contextSources.some(source => source.kind === 'web_search') || undefined,
+      autoApplyToPage: lastUserMessage?.meta?.autoApplyToPage,
+      sourceTabId: lastUserMessage?.meta?.sourceTabId
+    });
+  }
+
+  function describeContextSource(source) {
+    const icon = SOURCE_KIND_ICONS[source?.kind] || '📌';
+    const label = source?.label || source?.name || '上下文';
+    const titleParts = [];
+    if (source?.title) titleParts.push(source.title);
+    if (source?.url) titleParts.push(source.url);
+    if (source?.preview) titleParts.push(source.preview);
+    return {
+      icon,
+      label,
+      text: `${icon} ${label}`,
+      title: titleParts.join('\n')
+    };
+  }
+
+  function getContextSourceUrl(source) {
+    return String(source?.url || '').trim();
+  }
+
+  function hasContextSourceDetails(source) {
+    return !!(source?.title || source?.preview || source?.name || getContextSourceUrl(source));
+  }
+
+  function buildContextSourceSummary(source) {
+    if (!source) return '';
+    const info = describeContextSource(source);
+    return [
+      info.text,
+      source?.title || '',
+      getContextSourceUrl(source),
+      source?.preview || ''
+    ].filter(Boolean).join('\n');
+  }
+
+  function buildSourceAwareInstruction(context) {
+    const ctx = context || {};
+    const sources = dedupeContextSources(ctx.contextSources || []);
+    if (!sources.length) return '';
+    const list = sources
+      .map((source, idx) => `${idx + 1}. ${describeContextSource(source).text}`)
+      .join('\n');
+    return [
+      'If the latest user message includes attached context, ground the answer in that context first.',
+      'Start the reply with a short Chinese line: `参考来源：...` and only list labels from the available sources below.',
+      'If part of the answer goes beyond the provided context, explicitly mark that part as `推测`.',
+      'Do not claim to have checked or cited any source outside the available sources below.',
+      `可用来源：\n${list}`
+    ].join('\n');
+  }
+
+  function buildAssistantMetaFromContext(context) {
+    const ctx = context || {};
+    return compactObject({
+      contextAction: ctx.contextAction,
+      contextLabel: ctx.contextLabel,
+      contextSources: dedupeContextSources(ctx.contextSources || []),
+      requestedWebSearch: ctx.requestedWebSearch || undefined,
+      autoApplyToPage: ctx.autoApplyToPage || undefined,
+      sourceTabId: ctx.sourceTabId
+    });
+  }
+
+  function buildThinkingIndicatorHtml(title, subtitle) {
+    return [
+      '<div class="thinking-shell">',
+      '<div class="thinking-head">',
+      '<span class="thinking-pulse"></span>',
+      `<span class="thinking-title">${escapeHtml(title || 'AI 正在思考')}</span>`,
+      '</div>',
+      `<div class="thinking-sub">${escapeHtml(subtitle || '已收到请求，正在生成回复')}</div>`,
+      '<div class="thinking-bars">',
+      '<span class="thinking-bar"></span>',
+      '<span class="thinking-bar"></span>',
+      '<span class="thinking-bar"></span>',
+      '</div>',
+      '</div>'
+    ].join('');
   }
 
   function buildMessageMeta(options) {
@@ -160,7 +307,9 @@
 
   function appendSearchResultToLastUserMessage(messages, searchResult, label) {
     if (!searchResult || !messages?.length) return messages;
-    const prefix = `[${label || '联网搜索结果'}]\n${searchResult}`;
+    const searchText = getSearchResultText(searchResult);
+    if (!searchText) return messages;
+    const prefix = `[${label || '联网搜索结果'}]\n${searchText}`;
     const last = messages[messages.length - 1];
     if (!last || last.role !== 'user') return messages;
 
@@ -173,6 +322,42 @@
     if (textPart) textPart.text += `\n\n${prefix}`;
     else last.content.unshift({ type: 'text', text: prefix });
     return messages;
+  }
+
+  function createWebSearchSource(item, idx, labels) {
+    const title = String(item?.title || item?.name || '').trim();
+    const url = String(item?.url || item?.link || '').trim();
+    const preview = previewText(item?.snippet || item?.description || item?.content || item?.preview || '', 240);
+    const fallbackLabel = `${labels?.webSearchResult || '搜索结果'} ${idx + 1}`;
+    return createContextSource('web_search', {
+      label: title ? previewText(title, 42) : fallbackLabel,
+      title: title || undefined,
+      name: title || undefined,
+      url: url || undefined,
+      preview: preview || undefined
+    });
+  }
+
+  function buildSearchResponse(options) {
+    const opts = options || {};
+    const text = String(opts.text || '').trim();
+    const sources = dedupeContextSources((opts.items || []).map((item, idx) => createWebSearchSource(item, idx, opts.labels)).filter(Boolean));
+    if (!text && !sources.length) return null;
+    return compactObject({
+      text,
+      sources,
+      answer: opts.answer || undefined
+    });
+  }
+
+  function getSearchResultText(searchResult) {
+    if (typeof searchResult === 'string') return searchResult;
+    return String(searchResult?.text || '').trim();
+  }
+
+  function getSearchResultSources(searchResult) {
+    if (!searchResult || typeof searchResult === 'string') return [];
+    return dedupeContextSources(searchResult.sources || []);
   }
 
   function buildSystemMessage(systemPrompt, formatInstruction, fallbackSystemPrompt) {
@@ -324,7 +509,7 @@
         text += `${idx + 1}. [${item.title}](${item.url})\n${item.content?.slice(0, 300)}...\n\n`;
       });
     }
-    return text || null;
+    return buildSearchResponse({ text, items: data.results || [], answer: data.answer, labels });
   }
 
   async function searchSerper(query, key, labels) {
@@ -339,7 +524,7 @@
     data.organic?.forEach((item, idx) => {
       text += `${idx + 1}. [${item.title}](${item.link})\n${item.snippet}\n\n`;
     });
-    return text || null;
+    return buildSearchResponse({ text, items: data.organic || [], labels });
   }
 
   async function searchSerpApi(query, key, labels) {
@@ -350,7 +535,7 @@
     data.organic_results?.forEach((item, idx) => {
       text += `${idx + 1}. [${item.title}](${item.link})\n${item.snippet}\n\n`;
     });
-    return text || null;
+    return buildSearchResponse({ text, items: data.organic_results || [], labels });
   }
 
   async function searchBing(query, key, labels) {
@@ -363,7 +548,7 @@
     data.webPages?.value?.forEach((item, idx) => {
       text += `${idx + 1}. [${item.name}](${item.url})\n${item.snippet}\n\n`;
     });
-    return text || null;
+    return buildSearchResponse({ text, items: data.webPages?.value || [], labels });
   }
 
   async function searchBrave(query, key, labels) {
@@ -376,7 +561,7 @@
     data.web?.results?.forEach((item, idx) => {
       text += `${idx + 1}. [${item.title}](${item.url})\n${item.description}\n\n`;
     });
-    return text || null;
+    return buildSearchResponse({ text, items: data.web?.results || [], labels });
   }
 
   async function searchCustom(query, customSearchUrl, key, labels) {
@@ -396,7 +581,7 @@
 
     if (!items) {
       text += JSON.stringify(data, null, 2);
-      return text;
+      return buildSearchResponse({ text, items: [], labels });
     }
 
     items.slice(0, 5).forEach((item, idx) => {
@@ -405,11 +590,12 @@
       const snippet = item.snippet || item.description || item.content || '';
       text += `${idx + 1}. [${title}](${url})\n${snippet.slice(0, 200)}\n\n`;
     });
-    return text || null;
+    return buildSearchResponse({ text, items: items.slice(0, 5), labels });
   }
 
   global.EasyChatCore = {
     DISPLAY_TAG_ICONS,
+    SOURCE_KIND_ICONS,
     previewText,
     normalizeBaseUrl,
     toApiContent,
@@ -418,7 +604,19 @@
     parseDisplayText,
     buildUserContent,
     createContextSource,
+    dedupeContextSources,
     buildContextSources,
+    getMessageContextSources,
+    resolveTurnContext,
+    describeContextSource,
+    getContextSourceUrl,
+    hasContextSourceDetails,
+    buildContextSourceSummary,
+    getSearchResultText,
+    getSearchResultSources,
+    buildSourceAwareInstruction,
+    buildAssistantMetaFromContext,
+    buildThinkingIndicatorHtml,
     buildMessageMeta,
     createUserMessage,
     createAssistantMessage,
