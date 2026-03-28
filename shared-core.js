@@ -1,5 +1,5 @@
 (function (global) {
-  const DISPLAY_TAG_ICONS = ['💬', '💻', '✏️', '📄', '📌'];
+  const DISPLAY_TAG_ICONS = ['🧭', '🕘', '💬', '💻', '✏️', '📄', '📌'];
   const SOURCE_KIND_ICONS = {
     selection: '💻',
     page: '📄',
@@ -408,9 +408,62 @@
     return res;
   }
 
+  function buildSseCompletionFromText(rawText) {
+    const lines = String(rawText || '').split(/\r?\n/);
+    let lastJson = null;
+    let full = '';
+    let usage = null;
+
+    lines.forEach((rawLine) => {
+      const line = rawLine.trim();
+      if (!line.startsWith('data:')) return;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') return;
+      try {
+        const json = JSON.parse(payload);
+        lastJson = json;
+        if (json.usage) usage = json.usage;
+        const choice = json.choices?.[0] || {};
+        const deltaText = choice?.delta?.content || '';
+        const messageText = choice?.message?.content || '';
+        if (deltaText) full += deltaText;
+        else if (messageText) full += messageText;
+      } catch {}
+    });
+
+    if (!lastJson) {
+      throw new Error('invalid_json_response');
+    }
+
+    if (!full) {
+      return lastJson;
+    }
+
+    const choice = lastJson.choices?.[0] || {};
+    return {
+      ...lastJson,
+      usage: usage || lastJson.usage,
+      choices: [{
+        ...choice,
+        message: {
+          role: choice?.message?.role || 'assistant',
+          content: full
+        }
+      }]
+    };
+  }
+
   async function requestChatCompletionJson(options) {
     const res = await fetchChatCompletion(options);
-    return await res.json();
+    try {
+      return await res.clone().json();
+    } catch {}
+
+    const raw = await res.text();
+    if (/^\s*data:/m.test(raw)) {
+      return buildSseCompletionFromText(raw);
+    }
+    return JSON.parse(raw);
   }
 
   async function streamChatCompletion(options) {
@@ -629,4 +682,4 @@
     streamChatCompletion,
     executeSearch
   };
-})(window);
+})(typeof globalThis !== 'undefined' ? globalThis : window);

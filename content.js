@@ -30,6 +30,7 @@
   let sourceHighlightRefreshRaf = 0;
   let sourceHighlightTimer = 0;
   let sourceHighlightKeyHandler = null;
+  let pageActionRegistry = new Map();
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const INLINE_TRANSLATE_MAX_CHARS = 120;
   const INLINE_TRANSLATE_MAX_LINES = 3;
@@ -81,6 +82,11 @@
     } else if (msg.type === 'TOGGLE_ANNOTATIONS') {
       toggleAnnotations();
       sendResponse({ visible: annotationsVisible });
+    } else if (msg.type === 'GET_PAGE_ACTIONABLES') {
+      sendResponse(getPageActionables(msg.limit || 40));
+    } else if (msg.type === 'EXECUTE_PAGE_ACTIONS') {
+      executePageActions(msg.actions || []).then(sendResponse);
+      return true;
     } else if (msg.type === 'APPLY_ASSISTANT_TEXT') {
       sendResponse(applyAssistantText(msg.text || ''));
     } else if (msg.type === 'HIGHLIGHT_CONTEXT_SOURCE') {
@@ -852,6 +858,322 @@
     }
 
     return { ok: false, error: 'no_editable_target' };
+  }
+
+  function clipPageActionText(text, maxLen = 80) {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return '';
+    return value.length > maxLen ? `${value.slice(0, maxLen - 1).trim()}…` : value;
+  }
+
+  function isInsideEasyChatOverlay(node) {
+    const el = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    return !!(
+      el && (
+        selectionAskBar?.contains(el) ||
+        selectionAskTooltip?.contains(el) ||
+        inlineTranslateBubble?.contains(el) ||
+        sourceHighlightOverlay?.contains(el) ||
+        sourceHighlightDismissBtn?.contains(el)
+      )
+    );
+  }
+
+  function isElementActuallyVisible(el) {
+    if (!el || !el.isConnected) return false;
+    if (isInsideEasyChatOverlay(el)) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') < 0.05) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width >= 4 && rect.height >= 4;
+  }
+
+  function isElementDisabled(el) {
+    return !!(el?.disabled || el?.getAttribute?.('aria-disabled') === 'true');
+  }
+
+  function getAssociatedLabelText(el) {
+    if (!el) return '';
+    const parts = [];
+    const parentLabel = el.closest?.('label');
+    if (parentLabel) parts.push(parentLabel.innerText || parentLabel.textContent || '');
+    if (el.id && typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+      try {
+        document.querySelectorAll(`label[for="${CSS.escape(el.id)}"]`).forEach(label => {
+          parts.push(label.innerText || label.textContent || '');
+        });
+      } catch {}
+    }
+    return clipPageActionText(parts.join(' '), 80);
+  }
+
+  function getElementKind(el) {
+    if (!el) return 'clickable';
+    if (isTextInput(el)) return 'input';
+    if (el.tagName === 'TEXTAREA') return 'textarea';
+    if (el.isContentEditable) return 'editor';
+    if (el.tagName === 'SELECT') return 'select';
+    if (el.tagName === 'A' && el.href) return 'link';
+    if (el.tagName === 'INPUT') {
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      if (['button', 'submit', 'reset', 'checkbox', 'radio'].includes(type)) return 'button';
+    }
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    if (role === 'button' || role === 'tab' || role === 'menuitem') return 'button';
+    if (role === 'link') return 'link';
+    return 'clickable';
+  }
+
+  function getElementSupportedActions(el, kind) {
+    if (kind === 'input' || kind === 'textarea' || kind === 'editor') return ['type', 'click'];
+    if (kind === 'button' || kind === 'link' || kind === 'clickable' || kind === 'select') return ['click'];
+    return [];
+  }
+
+  function getElementPrimaryLabel(el) {
+    const textContent = clipPageActionText(el?.innerText || el?.textContent || '', 80);
+    const valueText = clipPageActionText(el?.value || '', 80);
+    const candidates = [
+      el?.getAttribute?.('aria-label'),
+      el?.getAttribute?.('placeholder'),
+      getAssociatedLabelText(el),
+      el?.getAttribute?.('title'),
+      el?.getAttribute?.('alt'),
+      textContent,
+      valueText,
+      el?.getAttribute?.('name'),
+      el?.id
+    ];
+    return candidates.map(value => clipPageActionText(value, 80)).find(Boolean) || '';
+  }
+
+  function summarizeHref(href) {
+    try {
+      const url = new URL(href, location.href);
+      return clipPageActionText(`${url.hostname}${url.pathname}`, 80);
+    } catch {
+      return clipPageActionText(href, 80);
+    }
+  }
+
+  function scorePageActionable(entry) {
+    let score = 0;
+    if (entry.kind === 'input' || entry.kind === 'textarea' || entry.kind === 'editor') score += 90;
+    else if (entry.kind === 'button') score += 75;
+    else if (entry.kind === 'select') score += 70;
+    else if (entry.kind === 'link') score += 55;
+    else score += 45;
+    if (entry.inViewport) score += 18;
+    if (entry.label) score += Math.min(entry.label.length, 24);
+    if (entry.placeholder) score += 10;
+    if (entry.element === document.activeElement) score += 12;
+    if (entry.href) score += 4;
+    return score;
+  }
+
+  function getPageActionables(limit = 40) {
+    const rawCandidates = Array.from(new Set(document.querySelectorAll(
+      'button, a[href], input:not([type="hidden"]), textarea, select, summary, [role="button"], [role="link"], [contenteditable=""], [contenteditable="true"]'
+    )));
+
+    const ranked = rawCandidates
+      .filter(el => !isElementDisabled(el))
+      .filter(isElementActuallyVisible)
+      .map(el => {
+        const rect = el.getBoundingClientRect();
+        const kind = getElementKind(el);
+        const actions = getElementSupportedActions(el, kind);
+        if (!actions.length) return null;
+        const label = getElementPrimaryLabel(el);
+        const placeholder = clipPageActionText(el.getAttribute?.('placeholder') || '', 60);
+        const name = clipPageActionText(el.getAttribute?.('name') || '', 40);
+        const inputType = clipPageActionText(el.getAttribute?.('type') || '', 24);
+        const href = el.tagName === 'A' && el.href ? summarizeHref(el.href) : '';
+        const inViewport = rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
+        const entry = { element: el, kind, actions, label, placeholder, name, inputType, href, inViewport };
+        return { ...entry, score: scorePageActionable(entry) };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.max(1, Math.min(limit || 40, 60)));
+
+    pageActionRegistry = new Map();
+    const elements = ranked.map((entry, index) => {
+      const id = `e${index + 1}`;
+      pageActionRegistry.set(id, {
+        id,
+        element: entry.element,
+        kind: entry.kind,
+        label: entry.label,
+        placeholder: entry.placeholder,
+        name: entry.name,
+        inputType: entry.inputType,
+        href: entry.href,
+        actions: entry.actions
+      });
+      return {
+        id,
+        kind: entry.kind,
+        label: entry.label,
+        placeholder: entry.placeholder,
+        name: entry.name,
+        type: entry.inputType,
+        href: entry.href,
+        inViewport: entry.inViewport,
+        actions: entry.actions
+      };
+    });
+
+    return {
+      ok: true,
+      title: document.title || '',
+      url: location.href,
+      elements,
+      total: elements.length
+    };
+  }
+
+  function getRegisteredPageActionTarget(targetId) {
+    const entry = pageActionRegistry.get(String(targetId || '').trim());
+    if (!entry?.element || !entry.element.isConnected) return null;
+    return entry;
+  }
+
+  function replaceTextInputValue(input, text) {
+    if (input.disabled || input.readOnly) {
+      return { ok: false, error: 'input_read_only' };
+    }
+    input.focus({ preventScroll: true });
+    try {
+      if (typeof input.select === 'function') input.select();
+    } catch {}
+    const proto = Object.getPrototypeOf(input);
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(input, text);
+    else input.value = text;
+    dispatchInputEvent(input, text);
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return { ok: true };
+  }
+
+  function replaceContentEditableValue(editable, text) {
+    editable.focus({ preventScroll: true });
+    editable.innerHTML = '';
+    editable.appendChild(buildTextFragment(text));
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(editable);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      lastSelectionRange = range.cloneRange();
+    }
+    dispatchInputEvent(editable, text);
+    editable.dispatchEvent(new Event('change', { bubbles: true }));
+    return { ok: true };
+  }
+
+  async function executePageActionStep(step) {
+    const action = String(step?.action || '').trim().toLowerCase();
+    if (action === 'scroll') {
+      const amountMap = {
+        small: Math.max(240, Math.round(window.innerHeight * 0.45)),
+        medium: Math.max(420, Math.round(window.innerHeight * 0.8)),
+        large: Math.max(680, Math.round(window.innerHeight * 1.2))
+      };
+      const direction = String(step?.direction || 'down').toLowerCase() === 'up' ? 'up' : 'down';
+      const amountKey = ['small', 'medium', 'large'].includes(String(step?.amount || '').toLowerCase())
+        ? String(step.amount).toLowerCase()
+        : 'medium';
+      const delta = amountMap[amountKey] * (direction === 'up' ? -1 : 1);
+      window.scrollBy({ top: delta, behavior: 'smooth' });
+      await waitForAnimationFrames(2);
+      return {
+        ok: true,
+        action: 'scroll',
+        summary: `${direction === 'up' ? '向上' : '向下'}滚动${amountKey === 'small' ? '一小段' : amountKey === 'large' ? '一大段' : '一段'}`
+      };
+    }
+
+    const entry = getRegisteredPageActionTarget(step?.targetId);
+    if (!entry) {
+      return { ok: false, action, error: 'target_not_found', summary: '未找到目标元素' };
+    }
+
+    entry.element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+    await waitForAnimationFrames(2);
+
+    if (action === 'click') {
+      try {
+        entry.element.focus?.({ preventScroll: true });
+      } catch {}
+      entry.element.click();
+      await waitForAnimationFrames(1);
+      return {
+        ok: true,
+        action: 'click',
+        targetId: entry.id,
+        targetLabel: entry.label,
+        summary: `点击“${entry.label || entry.kind}”`
+      };
+    }
+
+    if (action === 'type') {
+      const text = String(step?.text ?? '').trim();
+      if (!text) {
+        return { ok: false, action, error: 'empty_text', summary: '缺少要输入的文字' };
+      }
+      let result = null;
+      if (entry.kind === 'input' || entry.kind === 'textarea') {
+        result = replaceTextInputValue(entry.element, text);
+      } else if (entry.kind === 'editor') {
+        result = replaceContentEditableValue(entry.element, text);
+      } else {
+        return { ok: false, action, error: 'target_not_typable', summary: '目标元素不支持输入' };
+      }
+      if (!result?.ok) {
+        return {
+          ok: false,
+          action,
+          error: result?.error || 'type_failed',
+          summary: result?.error === 'input_read_only' ? '目标输入框只读' : '输入失败'
+        };
+      }
+      return {
+        ok: true,
+        action: 'type',
+        targetId: entry.id,
+        targetLabel: entry.label,
+        text,
+        summary: `在“${entry.label || entry.kind}”输入“${clipPageActionText(text, 36)}”`
+      };
+    }
+
+    return { ok: false, action, error: 'unsupported_action', summary: '不支持的页面动作' };
+  }
+
+  async function executePageActions(actions) {
+    const queue = Array.isArray(actions) ? actions.slice(0, 3) : [];
+    if (!queue.length) {
+      return { ok: false, error: 'empty_actions', results: [] };
+    }
+
+    const results = [];
+    for (let i = 0; i < queue.length; i += 1) {
+      const result = await executePageActionStep(queue[i]);
+      results.push(result);
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: result.error || 'step_failed',
+          stepIndex: i,
+          results
+        };
+      }
+    }
+
+    return { ok: true, results };
   }
 
   function normalizeSearchText(text, options) {

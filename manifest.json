@@ -3,7 +3,7 @@
   "name": "EasyChat for Edge",
   "version": "2.1.0",
   "description": "Easy AI Chat - Support 200+ AI Models with Full Features",
-  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel", "history"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_title": "EasyChat for Edge",
