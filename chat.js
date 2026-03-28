@@ -30,11 +30,33 @@ let autoScroll = true;
 let webSearchEnabled = false;
 let tokenUsage = {}; // { modelName: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }
 let currentLanguage = 'en';
+let draftSourceContext = null;
 let hostWindowId = (() => {
   const raw = new URLSearchParams(location.search).get('sourceWindowId');
   const num = raw ? parseInt(raw, 10) : NaN;
   return Number.isFinite(num) ? num : null;
 })();
+const initialSessionId = (() => {
+  const raw = new URLSearchParams(location.search).get('sessionId');
+  return raw ? String(raw) : '';
+})();
+let typingFlipState = null;
+const markdownRenderCache = new Map();
+const MARKDOWN_RENDER_CACHE_LIMIT = 120;
+const REASONING_HEADING_PAGES = {
+  'persona setup': ['检查角色设定', '核对上下文约束'],
+  'parsing user persona': ['解析用户设定', '提炼角色要求'],
+  'handling greeting': ['处理开场招呼', '准备回应语气'],
+  'handling greetings': ['处理开场招呼', '准备回应语气'],
+  'handling repeat greeting': ['识别重复招呼', '调整回复方式'],
+  'refusing jailbreak': ['校验安全边界', '避免越权响应'],
+  'refusing persona change': ['保持默认身份', '拒绝角色切换'],
+  'deciding on role-play': ['评估角色扮演', '确认回应范围'],
+  'drafting a fresh response': ['整理回复结构', '生成自然表达'],
+  'joking about': ['补一点幽默感', '让语气更轻一点'],
+  'acknowledge the repeat': ['识别上下文重复', '避免机械复述'],
+  'thinking about your request': ['接收你的请求', '整理回复思路']
+};
 
 // ── Language Translations ──
 const translations = {
@@ -50,6 +72,7 @@ const translations = {
     inputHint: 'Enter 发送 · Shift+Enter 换行 · Ctrl+N 新对话',
     welcomeTitle: 'EasyChat for Edge',
     welcomeDesc: '支持 Markdown · 图片 · 文件 · 流式输出',
+    currentProfileLabel: '当前配置',
     shortcutNew: '新对话',
     shortcutFocus: '聚焦输入',
     shortcutExport: '导出对话',
@@ -95,6 +118,36 @@ const translations = {
     copy: '复制',
     copied: '已复制',
     copiedCheck: '已复制 ✓',
+    sourceOpened: '已打开来源页面',
+    sourceCopied: '已复制来源摘要',
+    sourceUnavailable: '此来源暂时没有可打开内容',
+    sourceDetailHint: '点击查看来源详情',
+    sourceDetailsTitle: '来源详情',
+    sourcePreviewTitle: '内容摘录',
+    sourceOpenBtn: '打开原页',
+    sourceCopyBtn: '复制摘要',
+    sourceLocateBtn: '定位来源',
+    sourceLocated: '已定位到来源位置',
+    sourceLocateFallback: '已打开来源页面，但未找到对应文本',
+    sourceLocatedPreview: '已按摘录定位到来源位置',
+    sourceLocatedTitle: '已按标题定位到来源位置',
+    sourceLocatedLoose: '已通过宽松匹配定位到来源位置',
+    sourceAskBtn: '问这个来源',
+    sourceAskLabel: '来源追问',
+    sourceAskReady: '已附加来源上下文',
+    sourceQuestionHint: '补充你想问这个来源的问题...',
+    sourcesAskBtn: '问这些来源',
+    sourcesAskLabel: '多来源追问',
+    sourcesQuestionHint: '补充你想问这些来源的问题...',
+    applyToPage: '回填到页面',
+    applySuccess: '已回填到页面',
+    applyNoTarget: '页面中没有可回填的位置',
+    applySelectionOnly: '当前选中的不是可编辑内容',
+    applyReadOnly: '当前输入框不可编辑',
+    applyBuiltinPage: '浏览器内置页面无法回填',
+    applyFailed: '回填失败',
+    thinkingTitle: 'AI 正在思考',
+    thinkingHint: '请求已发出，正在等待回复',
     regenerate: '重新生成',
     editResend: '编辑重发',
     customModel: '自定义模型...',
@@ -156,6 +209,7 @@ const translations = {
     inputHint: 'Enter to send · Shift+Enter for new line · Ctrl+N for new chat',
     welcomeTitle: 'EasyChat for Edge',
     welcomeDesc: 'Support Markdown · Images · Files · Streaming',
+    currentProfileLabel: 'Current Profile',
     shortcutNew: 'New Chat',
     shortcutFocus: 'Focus Input',
     shortcutExport: 'Export Chat',
@@ -201,6 +255,36 @@ const translations = {
     copy: 'Copy',
     copied: 'Copied',
     copiedCheck: 'Copied ✓',
+    sourceOpened: 'Opened source page',
+    sourceCopied: 'Copied source summary',
+    sourceUnavailable: 'This source has no openable details',
+    sourceDetailHint: 'Click to view source details',
+    sourceDetailsTitle: 'Source Details',
+    sourcePreviewTitle: 'Excerpt',
+    sourceOpenBtn: 'Open Page',
+    sourceCopyBtn: 'Copy Summary',
+    sourceLocateBtn: 'Locate Source',
+    sourceLocated: 'Located the source on page',
+    sourceLocateFallback: 'Opened the source page, but could not find the exact text',
+    sourceLocatedPreview: 'Located the source using the excerpt',
+    sourceLocatedTitle: 'Located the source using the title',
+    sourceLocatedLoose: 'Located the source using a loose match',
+    sourceAskBtn: 'Ask This Source',
+    sourceAskLabel: 'Source Follow-up',
+    sourceAskReady: 'Source attached to composer',
+    sourceQuestionHint: 'Ask a follow-up about this source...',
+    sourcesAskBtn: 'Ask These Sources',
+    sourcesAskLabel: 'Sources Follow-up',
+    sourcesQuestionHint: 'Ask a follow-up about these sources...',
+    applyToPage: 'Apply to Page',
+    applySuccess: 'Applied to page',
+    applyNoTarget: 'No editable target found on page',
+    applySelectionOnly: 'The selected content is not editable',
+    applyReadOnly: 'The current input is read-only',
+    applyBuiltinPage: 'Cannot apply on browser built-in pages',
+    applyFailed: 'Apply failed',
+    thinkingTitle: 'AI is thinking',
+    thinkingHint: 'Request sent, waiting for the first reply',
     regenerate: 'Regenerate',
     editResend: 'Edit & Resend',
     customModel: 'Custom Model...',
@@ -258,6 +342,58 @@ function t(key) {
 
 function bgMessage(msg) {
   return new Promise(resolve => chrome.runtime.sendMessage(msg, resolve));
+}
+
+function tabMessage(tabId, msg) {
+  return new Promise(resolve => {
+    chrome.tabs.sendMessage(tabId, msg, (resp) => {
+      if (chrome.runtime.lastError) resolve(null);
+      else resolve(resp);
+    });
+  });
+}
+
+async function getApplyTargetTab() {
+  const res = await bgMessage({ type: 'GET_HOST_ACTIVE_TAB', windowId: hostWindowId });
+  return res?.ok ? res : null;
+}
+
+function canApplyAssistantMessage(message) {
+  return message?.role === 'assistant' && !message.display && !!EasyChatCore.extractPlainText(message.content).trim();
+}
+
+function getApplyErrorMessage(error) {
+  if (error === 'selection_not_editable') return t('applySelectionOnly');
+  if (error === 'no_editable_target' || error === 'host_tab_not_found') return t('applyNoTarget');
+  if (error === 'input_read_only') return t('applyReadOnly');
+  return t('applyFailed');
+}
+
+async function applyAssistantMessageToPage(message) {
+  const text = EasyChatCore.extractPlainText(message?.content).trim();
+  if (!text) {
+    toast(t('applyFailed'));
+    return;
+  }
+
+  const tab = await getApplyTargetTab();
+  if (!tab?.tabId) {
+    toast(t('applyNoTarget'));
+    return;
+  }
+
+  if (/^(edge|chrome|about):/i.test(tab.url || '')) {
+    toast(t('applyBuiltinPage'));
+    return;
+  }
+
+  await new Promise(resolve => {
+    chrome.scripting.executeScript({ target: { tabId: tab.tabId }, files: ['content.js'] }, () => resolve());
+  });
+
+  const resp = await tabMessage(tab.tabId, { type: 'APPLY_ASSISTANT_TEXT', text });
+  if (resp?.ok) toast(t('applySuccess'));
+  else toast(getApplyErrorMessage(resp?.error));
 }
 
 async function openSidebar() {
@@ -470,6 +606,39 @@ const modelData = {
   'grok': {
     name: '🎯 xAI Grok',
     models: [
+      { id: 'grok-4.20-beta', name: 'Grok 4.20 Beta', badge: 'Latest' },
+      { id: 'grok-4.1', name: 'Grok 4.1' },
+      { id: 'grok-4.1-expert', name: 'Grok 4.1 Expert' },
+      { id: 'grok-4.1-fast', name: 'Grok 4.1 Fast' },
+      { id: 'grok-4.1-mini', name: 'Grok 4.1 Mini' },
+      { id: 'grok-4.1-thinking', name: 'Grok 4.1 Thinking' },
+      { id: 'grok-4', name: 'Grok 4', badge: 'Popular' },
+      { id: 'grok-4-expert', name: 'Grok 4 Expert' },
+      { id: 'grok-4-fast', name: 'Grok 4 Fast' },
+      { id: 'grok-4-fast-expert', name: 'Grok 4 Fast Expert' },
+      { id: 'grok-4-heavy', name: 'Grok 4 Heavy' },
+      { id: 'grok-4-mini', name: 'Grok 4 Mini' },
+      { id: 'grok-4-thinking', name: 'Grok 4 Thinking' },
+      { id: 'grok-3', name: 'Grok 3' },
+      { id: 'grok-3-fast', name: 'Grok 3 Fast' },
+      { id: 'grok-3-mini', name: 'Grok 3 Mini' },
+      { id: 'grok-3-thinking', name: 'Grok 3 Thinking' },
+      { id: 'grok-video', name: 'Grok Video' },
+      { id: 'grok-video-1_1', name: 'Grok Video 1:1' },
+      { id: 'grok-video-16_9', name: 'Grok Video 16:9' },
+      { id: 'grok-video-2_3', name: 'Grok Video 2:3' },
+      { id: 'grok-video-3_2', name: 'Grok Video 3:2' },
+      { id: 'grok-video-9_16', name: 'Grok Video 9:16' },
+      { id: 'grok-image', name: 'Grok Image' },
+      { id: 'grok-image-1_1', name: 'Grok Image 1:1' },
+      { id: 'grok-image-16_9', name: 'Grok Image 16:9' },
+      { id: 'grok-image-2_3', name: 'Grok Image 2:3' },
+      { id: 'grok-image-3_2', name: 'Grok Image 3:2' },
+      { id: 'grok-image-9_16', name: 'Grok Image 9:16' },
+      { id: 'grok-imagine-1.0-video', name: 'Grok Imagine 1.0 Video' },
+      { id: 'grok-imagine-1.0-edit', name: 'Grok Imagine 1.0 Edit' },
+      { id: 'grok-imagine-1.0', name: 'Grok Imagine 1.0' },
+      { id: 'grok-imagine-0.9', name: 'Grok Imagine 0.9' },
       { id: 'grok-2', name: 'Grok 2' },
       { id: 'grok-2-mini', name: 'Grok 2 Mini' }
     ]
@@ -521,6 +690,7 @@ const customModelWrap = document.getElementById('customModelWrap');
 const customModelInput = document.getElementById('customModelInput');
 const apiStatus = document.getElementById('apiStatus');
 const attachmentsEl = document.getElementById('attachments');
+const draftContextWrap = document.getElementById('draftContextWrap');
 const searchInput = document.getElementById('searchInput');
 const streamToggle = document.getElementById('streamToggle');
 const userAvatarInput = document.getElementById('userAvatarInput');
@@ -539,9 +709,12 @@ if (!profiles.default) {
 }
 
 // ── Model Selector ──
-function renderModelCategories(filter = '') {
+function renderModelCategories(filter = '', options = {}) {
   modelCategories.innerHTML = '';
   const filterLower = filter.toLowerCase();
+  const currentModelId = currentModelSpan.dataset.modelId || modelSelect.value || config.model || 'gpt-4o';
+  const expandCurrent = !!options.expandCurrent;
+  const scrollToCurrent = !!options.scrollToCurrent;
 
   Object.entries(modelData).forEach(([key, category]) => {
     const filteredModels = category.models.filter(m =>
@@ -554,16 +727,19 @@ function renderModelCategories(filter = '') {
     categoryDiv.className = 'model-category';
 
     const header = document.createElement('div');
-    header.className = 'model-category-header';
+    const shouldExpand = filterLower
+      ? true
+      : (expandCurrent && filteredModels.some(model => model.id === currentModelId));
+    header.className = 'model-category-header' + (shouldExpand ? '' : ' collapsed');
     header.innerHTML = `<span class="arrow">▼</span><span>${category.name}</span>`;
 
     const itemsDiv = document.createElement('div');
-    itemsDiv.className = 'model-category-items show';
+    itemsDiv.className = 'model-category-items' + (shouldExpand ? ' show' : '');
 
     filteredModels.forEach(model => {
       const item = document.createElement('div');
       item.className = 'model-item';
-      if (config.model === model.id) item.classList.add('active');
+      if (currentModelId === model.id) item.classList.add('active');
       item.title = model.id; // Show ID on hover
 
       let html = `<span>${model.name}</span>`;
@@ -572,18 +748,8 @@ function renderModelCategories(filter = '') {
 
       item.addEventListener('click', () => {
         config.model = model.id;
-        currentModelSpan.textContent = model.name;
+        syncCurrentModelState(model.id, model.name);
         modelDropdown.classList.remove('show');
-
-        // Update hidden select for compatibility
-        let opt = modelSelect.querySelector(`option[value="${model.id}"]`);
-        if (!opt) {
-          opt = document.createElement('option');
-          opt.value = model.id;
-          opt.textContent = model.name;
-          modelSelect.appendChild(opt);
-        }
-        modelSelect.value = model.id;
 
         // Show custom input if custom model
         if (model.id === 'custom') {
@@ -609,6 +775,15 @@ function renderModelCategories(filter = '') {
     categoryDiv.appendChild(itemsDiv);
     modelCategories.appendChild(categoryDiv);
   });
+
+  if (scrollToCurrent) {
+    const activeItem = modelCategories.querySelector('.model-item.active');
+    if (activeItem) {
+      requestAnimationFrame(() => {
+        activeItem.scrollIntoView({ block: 'center' });
+      });
+    }
+  }
 }
 
 // Toggle dropdown
@@ -616,14 +791,19 @@ modelBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   modelDropdown.classList.toggle('show');
   if (modelDropdown.classList.contains('show')) {
-    renderModelCategories();
+    modelSearch.value = '';
+    renderModelCategories('', { expandCurrent: true, scrollToCurrent: true });
     modelSearch.focus();
   }
 });
 
 // Search models
 modelSearch.addEventListener('input', (e) => {
-  renderModelCategories(e.target.value);
+  const filter = e.target.value;
+  renderModelCategories(filter, {
+    expandCurrent: !filter,
+    scrollToCurrent: !filter
+  });
 });
 
 // Close dropdown when clicking outside
@@ -634,6 +814,27 @@ document.addEventListener('click', (e) => {
 });
 
 // Initialize current model display
+function ensureModelSelectOption(modelId, modelName = modelId) {
+  if (!modelId) return;
+  let opt = modelSelect.querySelector(`option[value="${modelId}"]`);
+  if (!opt) {
+    opt = document.createElement('option');
+    opt.value = modelId;
+    opt.textContent = modelName;
+    modelSelect.appendChild(opt);
+  } else if (modelName) {
+    opt.textContent = modelName;
+  }
+}
+
+function syncCurrentModelState(modelId, modelName = modelId) {
+  if (!modelId) return;
+  currentModelSpan.dataset.modelId = modelId;
+  currentModelSpan.textContent = modelName || modelId;
+  ensureModelSelectOption(modelId, modelName || modelId);
+  modelSelect.value = modelId;
+}
+
 function updateCurrentModelDisplay() {
   const modelId = config.model || 'gpt-4o';
   let modelName = modelId;
@@ -643,11 +844,11 @@ function updateCurrentModelDisplay() {
     if (found) modelName = found.name;
   });
 
-  currentModelSpan.textContent = modelName;
+  syncCurrentModelState(modelId, modelName);
 }
 
 // ── Init ──
-chrome.storage.local.get(['config', 'sessions', 'profiles', 'currentProfile', 'tokenUsage'], (data) => {
+chrome.storage.local.get(['config', 'sessions', 'profiles', 'currentProfile', 'tokenUsage', 'currentId', 'currentPopupSessionId'], (data) => {
   if (data.profiles) {
     profiles = data.profiles;
   } else {
@@ -699,7 +900,15 @@ chrome.storage.local.get(['config', 'sessions', 'profiles', 'currentProfile', 't
     customModelInput.value = config.customModel || '';
   }
 
-  if (data.sessions) { sessions = data.sessions; renderHistory(); }
+  if (data.sessions) { sessions = data.sessions; }
+  currentId = initialSessionId || data.currentId || sessions[0]?.id || null;
+  if (currentId && !sessions.find(s => s.id === currentId)) currentId = sessions[0]?.id || null;
+  renderHistory();
+  if (currentId) {
+    loadSession(currentId, { syncStorage: false, forceRender: true });
+  } else {
+    renderMessages([]);
+  }
   if (data.tokenUsage) { tokenUsage = data.tokenUsage; }
 
   // Load language preference - MUST be before updateUILanguage
@@ -738,16 +947,182 @@ async function tavilySearch(query) {
   return EasyChatCore.executeSearch(query, config, {
     referenceSourceLabel: t('referenceSource'),
     searchResultsLabel: t('searchResults'),
+    webSearchResult: t('searchResults'),
     noTitleLabel: t('noTitle')
   });
 }
 
 // ── Model ──
 function getModel() {
-  if (config.model === 'custom') {
-    return customModelInput.value.trim() || 'gpt-4o';
+  const currentModelId = currentModelSpan.dataset.modelId || modelSelect.value || config.model || '';
+  if (currentModelId === 'custom') {
+    return customModelInput.value.trim() || config.customModel || 'gpt-4o';
   }
-  return config.model || 'gpt-4o';
+  return currentModelId || 'gpt-4o';
+}
+
+function isGrokModel(model) {
+  return /^grok([-.]|$)/i.test(String(model || '').trim());
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeGrokReasoningTranscript(text = '') {
+  let normalized = String(text || '').replace(/\r\n/g, '\n');
+  normalized = normalized.replace(/Thinking about your request(?=[A-Z])/g, 'Thinking about your request\n');
+
+  Object.keys(REASONING_HEADING_PAGES).forEach((marker) => {
+    if (marker === 'thinking about your request') return;
+    const escaped = escapeRegExp(marker);
+    normalized = normalized.replace(new RegExp(`([^\\n])(?=${escaped})`, 'gi'), '$1\n');
+  });
+
+  return normalized
+    .replace(/([^\n])(?=-\s)/g, '$1\n')
+    .replace(/([^\n])(?=##\s)/g, '$1\n')
+    .replace(/([^\n])(?=###\s)/g, '$1\n')
+    .replace(/([^\n])(?=\*\*[^*\n]{1,80}\*\*)/g, '$1\n');
+}
+
+function splitGrokReasoningAndAnswer(text = '') {
+  const normalized = normalizeGrokReasoningTranscript(text);
+  if (!/^\s*Thinking about your request/i.test(normalized)) {
+    return { reasoning: '', answer: '' };
+  }
+
+  const lines = normalized.split('\n');
+  const reasoningMarkers = Object.keys(REASONING_HEADING_PAGES);
+  let answerIndex = -1;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    if (/^[-*•]\s+/.test(trimmed)) continue;
+
+    const lower = trimmed.replace(/:$/, '').toLowerCase();
+    if (
+      lower.startsWith('thinking about your request') ||
+      reasoningMarkers.some(marker => lower === marker || lower.startsWith(`${marker}:`))
+    ) {
+      continue;
+    }
+
+    answerIndex = i;
+    break;
+  }
+
+  return {
+    reasoning: answerIndex >= 0 ? lines.slice(0, answerIndex).join('\n').trim() : normalized.trim(),
+    answer: answerIndex >= 0 ? lines.slice(answerIndex).join('\n').trim() : ''
+  };
+}
+
+function extractReasoningSourceText(text, model = '') {
+  const raw = String(text || '');
+  if (!raw || !isGrokModel(model)) return '';
+
+  const thinkMatch = raw.match(/^\s*<think\b[^>]*>([\s\S]*)$/i);
+  if (thinkMatch) {
+    return thinkMatch[1].replace(/<\/think>\s*[\s\S]*$/i, '').trim();
+  }
+
+  if (/^\s*Thinking about your request/i.test(raw)) {
+    return splitGrokReasoningAndAnswer(raw).reasoning;
+  }
+
+  return '';
+}
+
+function clipReasoningPreviewLine(text = '', maxLength = 34) {
+  const value = String(text || '').trim();
+  if (!value) return '';
+  if (value.length <= maxLength) return value;
+
+  const slice = value.slice(0, maxLength);
+  const lastSpace = slice.lastIndexOf(' ');
+  if (lastSpace >= Math.max(8, Math.floor(maxLength * 0.45))) {
+    return `${slice.slice(0, lastSpace).trim()}…`;
+  }
+  return `${slice.trim()}…`;
+}
+
+function normalizeReasoningPreviewLine(line = '') {
+  const cleaned = String(line || '')
+    .replace(/<\/?think\b[^>]*>/gi, '')
+    .replace(/\*\*/g, '')
+    .replace(/^\s{0,3}(?:[-*•]\s+|#{1,6}\s+|>\s*)/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return clipReasoningPreviewLine(cleaned);
+}
+
+function extractReasoningDisplayPages(text, model = '') {
+  const source = extractReasoningSourceText(text, model);
+  if (!source) return [];
+
+  const lines = normalizeGrokReasoningTranscript(source)
+    .replace(/<\/?think\b[^>]*>/gi, '')
+    .split('\n')
+    .map(normalizeReasoningPreviewLine)
+    .filter(Boolean);
+
+  const pages = [];
+  for (let i = 0; i < lines.length; i += 2) {
+    pages.push([lines[i] || '', lines[i + 1] || '']);
+  }
+
+  return pages.slice(-6);
+}
+
+function extractStreamableAnswerText(text, model = '') {
+  const raw = String(text || '');
+  if (!raw) return '';
+  if (!isGrokModel(model)) return raw.trimStart();
+
+  const thinkOpenMatch = raw.match(/^\s*<think\b[^>]*>/i);
+  if (thinkOpenMatch) {
+    const thinkCloseMatch = raw.match(/<\/think\s*>/i);
+    if (!thinkCloseMatch) return '';
+    return raw.slice(thinkCloseMatch.index + thinkCloseMatch[0].length).trimStart();
+  }
+
+  if (/^\s*Thinking about your request/i.test(raw)) {
+    return splitGrokReasoningAndAnswer(raw).answer.trimStart();
+  }
+
+  return raw.trimStart();
+}
+
+function sanitizeVisibleReasoningText(text, model = '', options = {}) {
+  const raw = String(text || '');
+  const hasThinkTag = /^\s*<think\b[^>]*>/i.test(raw);
+  const hasThinkingPrefix = /^\s*Thinking about your request/i.test(raw);
+  if (!raw || (!isGrokModel(model) && !hasThinkingPrefix && !hasThinkTag)) return raw;
+  const hideIfOnlyReasoning = options.hideIfOnlyReasoning !== false;
+
+  if (hasThinkTag) {
+    const thinkCloseMatch = raw.match(/<\/think\s*>/i);
+    const withoutThinkBlock = thinkCloseMatch
+      ? raw.slice(thinkCloseMatch.index + thinkCloseMatch[0].length).trimStart()
+      : '';
+    if (withoutThinkBlock) {
+      return withoutThinkBlock;
+    }
+    return hideIfOnlyReasoning ? '' : raw;
+  }
+
+  if (hasThinkingPrefix) {
+    const answer = splitGrokReasoningAndAnswer(raw).answer.trimStart();
+    if (answer) {
+      return answer;
+    }
+    return hideIfOnlyReasoning ? '' : raw;
+  }
+
+  return raw;
 }
 
 // ── Temperature slider ──
@@ -772,6 +1147,143 @@ function toast(msg, duration = 1800) {
   setTimeout(() => el.classList.remove('show'), duration);
 }
 
+function getCurrentProfileName() {
+  return currentProfile || 'default';
+}
+
+function getCurrentProfileText() {
+  return `${t('currentProfileLabel')}: ${getCurrentProfileName()}`;
+}
+
+function updateCurrentProfileIndicators() {
+  const statsProfile = document.getElementById('statsProfile');
+  if (statsProfile) statsProfile.textContent = getCurrentProfileText();
+
+  const welcomeProfile = document.getElementById('welcomeProfile');
+  if (welcomeProfile) welcomeProfile.textContent = getCurrentProfileText();
+}
+
+function buildWelcomeMarkup() {
+  return `<div class="welcome"><div class="welcome-icon">✦</div><h2>${t('welcomeTitle')}</h2><p>${t('welcomeDesc')}</p><div class="welcome-profile" id="welcomeProfile">${getCurrentProfileText()}</div><div class="shortcuts"><div class="shortcut"><kbd>Ctrl</kbd>+<kbd>N</kbd> ${t('shortcutNew')}</div><div class="shortcut"><kbd>Ctrl</kbd>+<kbd>/</kbd> ${t('shortcutFocus')}</div><div class="shortcut"><kbd>Ctrl</kbd>+<kbd>E</kbd> ${t('shortcutExport')}</div></div></div>`;
+}
+
+function buildSourceReferenceBlock(source) {
+  const info = EasyChatCore.describeContextSource(source);
+  const zh = currentLanguage === 'zh';
+  return [
+    zh ? `来源：${info.text}` : `Source: ${info.text}`,
+    source?.title ? (zh ? `标题：${source.title}` : `Title: ${source.title}`) : '',
+    source?.url ? (zh ? `链接：${source.url}` : `URL: ${source.url}`) : '',
+    source?.preview ? (zh ? `摘录：${source.preview}` : `Excerpt: ${source.preview}`) : ''
+  ].filter(Boolean).join('\n');
+}
+
+function createSourceFollowupContext(source) {
+  const label = t('sourceAskLabel');
+  const sourceBlock = buildSourceReferenceBlock(source);
+  const zh = currentLanguage === 'zh';
+  return {
+    type: 'source_followup',
+    icon: '💬',
+    label,
+    source,
+    meta: {
+      contextSources: [source]
+    },
+    promptFn: (userText) => zh
+      ? `请优先基于以下来源回答用户问题。如果来源不足以支持结论，请明确标注为“推测”。${userText ? `\n\n用户问题：${userText}` : '\n\n如果用户没有补充问题，请先概括该来源要点，再说明它的关键信息。'}\n\n来源信息：\n${sourceBlock}`
+      : `Answer the user's question primarily based on the source below. If the source is insufficient, explicitly mark that part as "Inference".${userText ? `\n\nUser Question: ${userText}` : '\n\nIf the user does not add a question, first summarize the source and then explain why it matters.'}\n\nSource:\n${sourceBlock}`
+  };
+}
+
+function buildSourcesReferenceBlock(sources) {
+  return EasyChatCore.dedupeContextSources(sources || [])
+    .map((source, index) => `${index + 1}.\n${buildSourceReferenceBlock(source)}`)
+    .join('\n\n');
+}
+
+function getSourcesFollowupLabel(count) {
+  return currentLanguage === 'zh'
+    ? `${t('sourcesAskLabel')}（${count}）`
+    : `${t('sourcesAskLabel')} (${count})`;
+}
+
+function getSourcesFollowupReadyMessage(count) {
+  return currentLanguage === 'zh'
+    ? `已附加 ${count} 个来源`
+    : `Attached ${count} sources to composer`;
+}
+
+function createSourcesFollowupContext(sources) {
+  const dedupedSources = EasyChatCore.dedupeContextSources(sources || []);
+  const count = dedupedSources.length;
+  const label = getSourcesFollowupLabel(count);
+  const sourceBlock = buildSourcesReferenceBlock(dedupedSources);
+  const zh = currentLanguage === 'zh';
+  return {
+    type: 'sources_followup',
+    icon: '🗂️',
+    label,
+    sources: dedupedSources,
+    meta: {
+      contextSources: dedupedSources
+    },
+    promptFn: (userText) => zh
+      ? `请优先基于以下多个来源回答用户问题，并注意综合与对比它们。如果来源不足以支持结论，请明确标注为“推测”。${userText ? `\n\n用户问题：${userText}` : '\n\n如果用户没有补充问题，请先概括这些来源的共同要点，再说明其中的重要差异。'}\n\n来源信息：\n${sourceBlock}`
+      : `Answer the user's question primarily based on the sources below. Combine and compare them carefully. If the sources are insufficient, explicitly mark that part as "Inference".${userText ? `\n\nUser Question: ${userText}` : '\n\nIf the user does not add a question, first summarize the key points shared across these sources, then note any important differences.'}\n\nSources:\n${sourceBlock}`
+  };
+}
+
+function getUserComposerPlaceholder() {
+  if (draftSourceContext?.type === 'source_followup') return t('sourceQuestionHint');
+  if (draftSourceContext?.type === 'sources_followup') return t('sourcesQuestionHint');
+  return t('placeholder');
+}
+
+function renderDraftContextTag() {
+  draftContextWrap.innerHTML = '';
+  if (!draftSourceContext) {
+    draftContextWrap.style.display = 'none';
+    userInput.placeholder = getUserComposerPlaceholder();
+    return;
+  }
+
+  draftContextWrap.style.display = 'flex';
+  const tag = document.createElement('div');
+  tag.className = 'draft-context-tag';
+  tag.innerHTML = `${draftSourceContext.icon} ${draftSourceContext.label}`;
+
+  const rm = document.createElement('button');
+  rm.type = 'button';
+  rm.className = 'draft-context-remove';
+  rm.textContent = '×';
+  rm.addEventListener('click', () => {
+    draftSourceContext = null;
+    renderDraftContextTag();
+    userInput.focus();
+  });
+
+  tag.appendChild(rm);
+  draftContextWrap.appendChild(tag);
+  userInput.placeholder = getUserComposerPlaceholder();
+}
+
+function attachSourceFollowupContext(source) {
+  draftSourceContext = createSourceFollowupContext(source);
+  renderDraftContextTag();
+  userInput.focus();
+  toast(t('sourceAskReady'));
+}
+
+function attachSourcesFollowupContext(sources) {
+  const dedupedSources = EasyChatCore.dedupeContextSources(sources || []);
+  if (!dedupedSources.length) return;
+  draftSourceContext = createSourcesFollowupContext(dedupedSources);
+  renderDraftContextTag();
+  userInput.focus();
+  toast(getSourcesFollowupReadyMessage(dedupedSources.length));
+}
+
 // ── Stats ──
 function updateStats() {
   const s = current();
@@ -779,6 +1291,7 @@ function updateStats() {
   const chars = s ? s.messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length : 0), 0) : 0;
   document.getElementById('statsMsgs').textContent = `${t('messages')}: ${msgs}`;
   document.getElementById('statsChars').textContent = `${t('characters')}: ${chars}`;
+  updateCurrentProfileIndicators();
   document.getElementById('statsModel').textContent = getModel();
 }
 
@@ -834,6 +1347,7 @@ document.getElementById('testBtn').addEventListener('click', async () => {
   const testBtn = document.getElementById('testBtn');
   const baseUrl = EasyChatCore.normalizeBaseUrl(baseUrlInput.value.trim());
   const apiKey = apiKeyInput.value.trim();
+  const model = getModel();
   if (!apiKey) { showTestResult('error', t('pleaseEnterApiKey')); return; }
   testBtn.disabled = true; testBtn.textContent = t('testing');
   showTestResult('info', t('connecting'));
@@ -841,7 +1355,7 @@ document.getElementById('testBtn').addEventListener('click', async () => {
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: getModel(), messages: [{ role: 'user', content: 'hi' }], max_tokens: 5, stream: false })
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 5, stream: false })
     });
     const json = await res.json().catch(() => null);
     if (res.ok) showTestResult('ok', `✅ 连接成功！回复: "${json?.choices?.[0]?.message?.content || ''}"\nURL: ${baseUrl}`);
@@ -972,7 +1486,7 @@ function updateUILanguage() {
   webSearchBtn.title = webSearchEnabled ? t('webSearchOn') : t('webSearchOff');
 
   // Update input
-  userInput.placeholder = t('placeholder');
+  userInput.placeholder = getUserComposerPlaceholder();
   document.querySelector('.input-hint').textContent = t('inputHint');
 
   // Update model search
@@ -983,6 +1497,7 @@ function updateUILanguage() {
   if (welcome) welcome.textContent = t('welcomeTitle');
   const welcomeDesc = document.querySelector('.welcome p');
   if (welcomeDesc) welcomeDesc.textContent = t('welcomeDesc');
+  updateCurrentProfileIndicators();
 
   // Update shortcuts
   const shortcuts = document.querySelectorAll('.welcome .shortcut');
@@ -1099,6 +1614,13 @@ function updateUILanguage() {
   contextLimitInput.placeholder = t('contextLimitPlaceholder');
   if (!userAvatarInput.value) userAvatarInput.placeholder = currentLanguage === 'zh' ? '留空使用默认' : 'Leave empty for default';
   if (!aiAvatarInput.value) aiAvatarInput.placeholder = currentLanguage === 'zh' ? '留空使用默认' : 'Leave empty for default';
+  if (draftSourceContext?.type === 'source_followup' && draftSourceContext.source) {
+    draftSourceContext = createSourceFollowupContext(draftSourceContext.source);
+    renderDraftContextTag();
+  } else if (draftSourceContext?.type === 'sources_followup' && draftSourceContext.sources?.length) {
+    draftSourceContext = createSourcesFollowupContext(draftSourceContext.sources);
+    renderDraftContextTag();
+  }
 
   const newProfileName = document.getElementById('newProfileName');
   if (newProfileName) newProfileName.placeholder = t('newProfilePlaceholder');
@@ -1230,13 +1752,23 @@ function newChat() {
   sessions.unshift({ id, title: t('newChat'), messages: [], createdAt: Date.now() });
   currentId = id; save(); renderHistory(); renderMessages([]);
   topbarTitle.textContent = t('newChat'); updateStats();
+  restoreBackgroundStreamForCurrentSession().catch(() => {});
 }
-function loadSession(id) {
-  currentId = id; renderHistory();
+function loadSession(id, options = {}) {
   const s = sessions.find(s => s.id === id);
   if (!s) return;
+  const sameSession = currentId === id;
+  currentId = id;
+  if (options.syncStorage !== false) saveCurrentId();
+  if (options.rerenderHistory) renderHistory();
+  else updateHistoryActiveState();
+  if (sameSession && !options.forceRender) {
+    restoreBackgroundStreamForCurrentSession().catch(() => {});
+    return;
+  }
   topbarTitle.textContent = s.title;
   renderMessages(s.messages); updateStats();
+  restoreBackgroundStreamForCurrentSession().catch(() => {});
 }
 function deleteSession(id) {
   confirm2(t('deleteConversation'), () => {
@@ -1263,13 +1795,103 @@ function renameSession(id) {
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } if (e.key === 'Escape') renderHistory(); });
 }
 function current() { return sessions.find(s => s.id === currentId); }
-function save() { chrome.storage.local.set({ sessions, tokenUsage }); }
+function save() { chrome.storage.local.set({ sessions, tokenUsage, currentId }); }
+function saveCurrentId() { chrome.storage.local.set({ currentId }); }
+function updateHistoryActiveState() {
+  historyList.querySelectorAll('.history-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.id === currentId);
+  });
+}
 
 let proxyStreaming = false; // true while handling a PROXY_SEND request
+let backgroundSyncBubble = null;
+let backgroundSyncSessionId = null;
+
+function setBackgroundStreamControls(sessionId) {
+  backgroundSyncSessionId = sessionId || null;
+  if (sessionId) {
+    streaming = true;
+    abortController = {
+      type: 'background',
+      sessionId,
+      abort() {
+        bgMessage({ type: 'STOP_BACKGROUND_STREAM', sessionId }).catch(() => {});
+      }
+    };
+    sendBtn.style.display = 'none';
+    stopBtn.style.display = 'flex';
+  } else if (!proxyStreaming) {
+    streaming = false;
+    abortController = null;
+    sendBtn.style.display = 'flex';
+    stopBtn.style.display = 'none';
+  }
+}
+
+function clearBackgroundSyncUi() {
+  backgroundSyncBubble = null;
+  backgroundSyncSessionId = null;
+  removeTyping();
+}
+
+function ensureBackgroundSyncBubble() {
+  if (backgroundSyncBubble && backgroundSyncSessionId === currentId) return backgroundSyncBubble;
+  removeTyping();
+  const row = document.createElement('div');
+  row.className = 'msg-row ai';
+  const wrap = document.createElement('div');
+  wrap.className = 'bubble-wrap';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  wrap.appendChild(bubble);
+  row.appendChild(createAiAvatarElement());
+  row.appendChild(wrap);
+  messagesEl.appendChild(row);
+  backgroundSyncBubble = bubble;
+  backgroundSyncSessionId = currentId;
+  scrollBottom();
+  return bubble;
+}
+
+async function restoreBackgroundStreamForCurrentSession() {
+  if (!currentId || proxyStreaming || (streaming && abortController?.type !== 'background')) return;
+  const res = await bgMessage({ type: 'GET_ACTIVE_STREAM', sessionId: currentId }).catch(() => null);
+  const stream = res?.stream;
+  if (!stream) {
+    if (backgroundSyncSessionId === currentId) clearBackgroundSyncUi();
+    if (!proxyStreaming) setBackgroundStreamControls(null);
+    return;
+  }
+
+  setBackgroundStreamControls(currentId);
+  const visibleText = extractStreamableAnswerText(stream.rawFull, stream.model).trim();
+  if (!visibleText) {
+    showReasoningPreview(stream.rawFull, stream.model);
+    return;
+  }
+
+  const bubble = ensureBackgroundSyncBubble();
+  const rendered = renderMarkdown(visibleText, { useCache: false, bind: false });
+  if (rendered) {
+    applyRenderedMarkdown(bubble, rendered);
+  } else {
+    bubble.className = 'bubble';
+    bubble.textContent = visibleText;
+  }
+  scrollBottom();
+}
 
 // ── Cross-window sync ──
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local' || streaming || proxyStreaming) return;
+  if (area !== 'local') return;
+  if (changes.currentId?.newValue && changes.currentId.newValue !== currentId && !streaming && !proxyStreaming) {
+    const nextId = changes.currentId.newValue;
+    if (sessions.find(s => s.id === nextId)) {
+      loadSession(nextId, { syncStorage: false });
+      return;
+    }
+  }
+  if (streaming || proxyStreaming) return;
   if (!changes.sessions) return;
   const newSessions = changes.sessions.newValue || [];
   const oldCount = (current()?.messages || []).length;
@@ -1278,11 +1900,66 @@ chrome.storage.onChanged.addListener((changes, area) => {
   const s = current();
   if (!s) return;
   const newCount = s.messages.length;
+  if (backgroundSyncBubble && backgroundSyncSessionId === currentId && newCount > oldCount) {
+    renderMessages(s.messages);
+    clearBackgroundSyncUi();
+    setBackgroundStreamControls(null);
+    return;
+  }
   if (newCount > oldCount) {
     for (let i = oldCount; i < newCount; i++) {
       addBubbleFromMsg(s.messages[i], i);
     }
     scrollBottom();
+  }
+});
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type !== 'STREAM_CHUNK' && msg.type !== 'STREAM_DONE' && msg.type !== 'STREAM_ERROR') return;
+  if (msg.sessionId !== currentId) return;
+  if (proxyStreaming || (streaming && abortController?.type !== 'background')) return;
+
+  if (msg.type === 'STREAM_CHUNK') {
+    setBackgroundStreamControls(msg.sessionId);
+    const visibleText = extractStreamableAnswerText(msg.rawFull, msg.model).trim();
+    if (!visibleText) {
+      showReasoningPreview(msg.rawFull, msg.model);
+      return;
+    }
+
+    const bubble = ensureBackgroundSyncBubble();
+    const rendered = renderMarkdown(visibleText, { useCache: false, bind: false });
+    if (rendered) {
+      applyRenderedMarkdown(bubble, rendered);
+    } else {
+      bubble.className = 'bubble';
+      bubble.textContent = visibleText;
+    }
+    scrollBottom();
+    return;
+  }
+
+  if (msg.type === 'STREAM_DONE') {
+    chrome.storage.local.get(['sessions'], (data) => {
+      if (data.sessions) sessions = data.sessions;
+      renderHistory();
+      const updated = sessions.find(s => s.id === currentId);
+      if (updated) {
+        topbarTitle.textContent = updated.title || t('newChat');
+        renderMessages(updated.messages);
+      }
+      clearBackgroundSyncUi();
+      setBackgroundStreamControls(null);
+    });
+    return;
+  }
+
+  clearBackgroundSyncUi();
+  setBackgroundStreamControls(null);
+  if (!msg.stopped) {
+    addErrorBubble(msg.error || '请求失败');
+  } else {
+    toast(t('generationStopped'));
   }
 });
 
@@ -1300,6 +1977,7 @@ function recordTokenUsage(model, usage) {
 function renderHistory(filter = '') {
   historyList.innerHTML = '';
   const list = filter ? sessions.filter(s => s.title.toLowerCase().includes(filter.toLowerCase())) : sessions;
+  const fragment = document.createDocumentFragment();
   list.forEach(s => {
     const div = document.createElement('div');
     div.className = 'history-item' + (s.id === currentId ? ' active' : '');
@@ -1316,23 +1994,58 @@ function renderHistory(filter = '') {
     delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteSession(s.id); });
     actions.appendChild(renameBtn); actions.appendChild(delBtn);
     div.appendChild(title); div.appendChild(actions);
-    historyList.appendChild(div);
+    fragment.appendChild(div);
   });
+  historyList.appendChild(fragment);
 }
 
 // ── Markdown ──
-function renderMarkdown(text) {
+function getMarkdownRenderCacheKey(text) {
+  return `${currentLanguage}\u0000${String(text || '')}`;
+}
+
+function trimMarkdownRenderCache() {
+  while (markdownRenderCache.size > MARKDOWN_RENDER_CACHE_LIMIT) {
+    const oldestKey = markdownRenderCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    markdownRenderCache.delete(oldestKey);
+  }
+}
+
+function bindMarkdownInteractions(root) {
+  if (!root) return;
+  root.querySelectorAll('a').forEach(link => {
+    link.setAttribute('target', '_blank');
+    link.setAttribute('rel', 'noopener noreferrer');
+  });
+  root.querySelectorAll('.code-copy').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const wrap = btn.closest('.code-wrap');
+      const code = wrap?.querySelector('pre code');
+      const pre = wrap?.querySelector('pre');
+      navigator.clipboard.writeText(code?.innerText || pre?.innerText || '').then(() => {
+        btn.textContent = t('copiedCheck');
+        setTimeout(() => {
+          btn.textContent = t('copy');
+        }, 1500);
+      });
+    });
+  });
+}
+
+function applyRenderedMarkdown(target, rendered) {
+  if (!target || !rendered) return;
+  target.className = rendered.className;
+  target.innerHTML = rendered.innerHTML;
+  bindMarkdownInteractions(target);
+}
+
+function buildRenderedMarkdownHtml(text) {
   if (typeof marked === 'undefined') return null;
   const html = marked.parse(text, { breaks: true, gfm: true });
   const div = document.createElement('div');
   div.className = 'bubble md';
   div.innerHTML = html;
-
-  // Make all links open in new tab
-  div.querySelectorAll('a').forEach(link => {
-    link.setAttribute('target', '_blank');
-    link.setAttribute('rel', 'noopener noreferrer');
-  });
 
   div.querySelectorAll('pre').forEach(pre => {
     const code = pre.querySelector('code');
@@ -1340,16 +2053,36 @@ function renderMarkdown(text) {
     const wrap = document.createElement('div'); wrap.className = 'code-wrap';
     const header = document.createElement('div'); header.className = 'code-header';
     const langLabel = document.createElement('span'); langLabel.className = 'code-lang'; langLabel.textContent = lang;
-    const btn = document.createElement('button'); btn.className = 'code-copy'; btn.textContent = t('copy');
-    btn.addEventListener('click', () => {
-      navigator.clipboard.writeText(code?.innerText || pre.innerText).then(() => {
-        btn.textContent = t('copiedCheck'); setTimeout(() => btn.textContent = t('copy'), 1500);
-      });
-    });
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'code-copy';
+    btn.textContent = t('copy');
     header.appendChild(langLabel); header.appendChild(btn);
     pre.parentNode.insertBefore(wrap, pre);
     wrap.appendChild(header); wrap.appendChild(pre);
   });
+  return div.innerHTML;
+}
+
+function renderMarkdown(text, options = {}) {
+  const useCache = options.useCache !== false;
+  const bind = options.bind !== false;
+  let html = null;
+  if (useCache) {
+    html = markdownRenderCache.get(getMarkdownRenderCacheKey(text)) || null;
+  }
+  if (!html) {
+    html = buildRenderedMarkdownHtml(text);
+    if (html == null) return null;
+    if (useCache) {
+      markdownRenderCache.set(getMarkdownRenderCacheKey(text), html);
+      trimMarkdownRenderCache();
+    }
+  }
+  const div = document.createElement('div');
+  div.className = 'bubble md';
+  div.innerHTML = html;
+  if (bind) bindMarkdownInteractions(div);
   return div;
 }
 
@@ -1357,10 +2090,12 @@ function renderMarkdown(text) {
 function renderMessages(messages) {
   messagesEl.innerHTML = '';
   if (!messages.length) {
-    messagesEl.innerHTML = `<div class="welcome"><div class="welcome-icon">✦</div><h2>${t('welcomeTitle')}</h2><p>${t('welcomeDesc')}</p><div class="shortcuts"><div class="shortcut"><kbd>Ctrl</kbd>+<kbd>N</kbd> ${t('shortcutNew')}</div><div class="shortcut"><kbd>Ctrl</kbd>+<kbd>/</kbd> ${t('shortcutFocus')}</div><div class="shortcut"><kbd>Ctrl</kbd>+<kbd>E</kbd> ${t('shortcutExport')}</div></div></div>`;
+    messagesEl.innerHTML = buildWelcomeMarkup();
     return;
   }
-  messages.forEach((m, i) => addBubbleFromMsg(m, i));
+  const fragment = document.createDocumentFragment();
+  messages.forEach((m, i) => addBubbleFromMsg(m, i, fragment));
+  messagesEl.appendChild(fragment);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
@@ -1380,7 +2115,329 @@ function appendBubbleExtraParts(bubble, content) {
   });
 }
 
-function addBubbleFromMsg(m, idx) {
+function createSourceBadges(sources) {
+  if (!sources?.length) return null;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;flex-direction:column;gap:6px;padding:0 2px;';
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
+  const detailHost = document.createElement('div');
+  let activeKey = '';
+  let activeChip = null;
+  sources.forEach(source => {
+    const info = EasyChatCore.describeContextSource(source);
+    const chip = document.createElement('button');
+    const action = getSourceBadgeAction(source);
+    chip.textContent = info.text;
+    chip.type = 'button';
+    chip.setAttribute('aria-label', info.label);
+    chip.title = getSourceBadgeTitle(source, info, action);
+    applySourceBadgeStyle(chip, false);
+    if (action === 'inspect') {
+      chip.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const key = getSourceBadgeKey(source);
+        if (activeKey === key) {
+          activeKey = '';
+          detailHost.replaceChildren();
+          if (activeChip) applySourceBadgeStyle(activeChip, false);
+          activeChip = null;
+          return;
+        }
+        detailHost.replaceChildren(createSourceDetailCard(source));
+        if (activeChip) applySourceBadgeStyle(activeChip, false);
+        applySourceBadgeStyle(chip, true);
+        activeChip = chip;
+        activeKey = key;
+      });
+    }
+    row.appendChild(chip);
+  });
+  wrap.appendChild(row);
+  wrap.appendChild(detailHost);
+  return wrap;
+}
+
+function getSourceBadgeKey(source) {
+  return JSON.stringify([
+    source?.kind || '',
+    source?.label || '',
+    source?.title || '',
+    source?.url || '',
+    source?.preview || ''
+  ]);
+}
+
+function getSourceBadgeAction(source) {
+  if (EasyChatCore.getContextSourceUrl(source) || EasyChatCore.hasContextSourceDetails(source)) return 'inspect';
+  return 'none';
+}
+
+function getSourceBadgeTitle(source, info, action) {
+  const hint = action === 'inspect' ? t('sourceDetailHint') : t('sourceUnavailable');
+  return [info.title || info.label, hint].filter(Boolean).join('\n');
+}
+
+function applySourceBadgeStyle(chip, active) {
+  chip.style.cssText = `display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;background:${active ? 'rgba(16,163,127,0.22)' : 'rgba(16,163,127,0.12)'};border:1px solid ${active ? 'rgba(16,163,127,0.46)' : 'rgba(16,163,127,0.28)'};color:${active ? '#eafff6' : '#9ae6c8'};font-size:11px;line-height:1.4;cursor:${chip.disabled ? 'default' : 'pointer'};appearance:none;font:inherit;outline:none;`;
+}
+
+function createTab(options) {
+  return new Promise(resolve => {
+    chrome.tabs.create(options, (tab) => {
+      if (chrome.runtime.lastError) resolve(null);
+      else resolve(tab || null);
+    });
+  });
+}
+
+function queryTabsByUrl(url) {
+  return new Promise(resolve => {
+    chrome.tabs.query({}, (tabs) => {
+      if (chrome.runtime.lastError) resolve([]);
+      else resolve((tabs || []).filter(tab => tab.url === url));
+    });
+  });
+}
+
+function activateTab(tabId) {
+  return new Promise(resolve => {
+    chrome.tabs.update(tabId, { active: true }, (tab) => {
+      if (chrome.runtime.lastError) resolve(null);
+      else resolve(tab || null);
+    });
+  });
+}
+
+function focusWindow(windowId) {
+  return new Promise(resolve => {
+    if (!windowId) {
+      resolve(false);
+      return;
+    }
+    chrome.windows.update(windowId, { focused: true }, () => resolve(!chrome.runtime.lastError));
+  });
+}
+
+function ensureContentScriptInjected(tabId) {
+  return new Promise(resolve => {
+    chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] }, () => {
+      resolve(!chrome.runtime.lastError);
+    });
+  });
+}
+
+async function openSourceTab(url) {
+  const existingTabs = await queryTabsByUrl(url);
+  const existing = existingTabs.find(tab => hostWindowId && tab.windowId === hostWindowId) || existingTabs[0] || null;
+  if (existing?.id) {
+    const updated = await activateTab(existing.id);
+    await focusWindow((updated || existing).windowId);
+    return updated || existing;
+  }
+
+  const primary = await createTab(hostWindowId ? { url, active: true, windowId: hostWindowId } : { url, active: true });
+  if (primary) return primary;
+  return createTab({ url, active: true });
+}
+
+function waitForTabReady(tabId, timeoutMs = 12000) {
+  return new Promise(resolve => {
+    if (!tabId) {
+      resolve(false);
+      return;
+    }
+
+    let settled = false;
+    let timer = 0;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve(ok);
+    };
+    const onUpdated = (updatedTabId, info) => {
+      if (updatedTabId === tabId && info.status === 'complete') finish(true);
+    };
+
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError) {
+        finish(false);
+        return;
+      }
+      if (tab?.status === 'complete') {
+        finish(true);
+        return;
+      }
+      chrome.tabs.onUpdated.addListener(onUpdated);
+      timer = window.setTimeout(() => finish(false), timeoutMs);
+    });
+  });
+}
+
+async function openSourceUrl(url) {
+  const tab = await openSourceTab(url);
+  return !!tab?.id;
+}
+
+async function locateSourceInPage(source) {
+  const url = EasyChatCore.getContextSourceUrl(source);
+  if (!url) {
+    toast(t('sourceUnavailable'));
+    return false;
+  }
+
+  const tab = await openSourceTab(url);
+  if (!tab?.id) {
+    toast(t('sourceUnavailable'));
+    return false;
+  }
+
+  const ready = await waitForTabReady(tab.id);
+  if (!ready) {
+    toast(t('sourceOpened'));
+    return false;
+  }
+
+  const injected = await ensureContentScriptInjected(tab.id);
+  if (!injected) {
+    toast(t('sourceOpened'));
+    return false;
+  }
+
+  const resp = await tabMessage(tab.id, { type: 'HIGHLIGHT_CONTEXT_SOURCE', source });
+  if (resp?.ok) {
+    toast(getSourceLocateMessage(resp));
+    return true;
+  }
+
+  toast(resp?.error === 'text_not_found' ? t('sourceLocateFallback') : t('sourceOpened'));
+  return false;
+}
+
+function getSourceLocateMessage(resp) {
+  if (resp?.loose) return t('sourceLocatedLoose');
+  if (resp?.matchedKind === 'title') return t('sourceLocatedTitle');
+  if (resp?.matchedKind === 'preview') return t('sourceLocatedPreview');
+  return t('sourceLocated');
+}
+
+async function copySourceSummary(source) {
+  const summary = EasyChatCore.hasContextSourceDetails(source)
+    ? EasyChatCore.buildContextSourceSummary(source)
+    : '';
+  if (!summary) {
+    toast(t('sourceUnavailable'));
+    return false;
+  }
+
+  try {
+    await navigator.clipboard.writeText(summary);
+    toast(t('sourceCopied'));
+    return true;
+  } catch {
+    toast(t('sourceUnavailable'));
+    return false;
+  }
+}
+
+function createSourceDetailActionButton(label, accent) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = label;
+  btn.style.cssText = `display:inline-flex;align-items:center;justify-content:center;padding:5px 10px;border-radius:999px;border:1px solid ${accent ? 'rgba(16,163,127,0.42)' : 'rgba(255,255,255,0.14)'};background:${accent ? 'rgba(16,163,127,0.16)' : 'rgba(255,255,255,0.04)'};color:${accent ? '#eafff6' : '#b7c7c1'};font-size:11px;cursor:pointer;appearance:none;font:inherit;`;
+  return btn;
+}
+
+function createSourceDetailCard(source) {
+  const info = EasyChatCore.describeContextSource(source);
+  const url = EasyChatCore.getContextSourceUrl(source);
+  const summary = EasyChatCore.buildContextSourceSummary(source);
+  const card = document.createElement('div');
+  card.style.cssText = 'padding:11px 12px;border-radius:12px;border:1px solid rgba(16,163,127,0.22);background:rgba(16,24,39,0.62);display:flex;flex-direction:column;gap:8px;';
+
+  const kicker = document.createElement('div');
+  kicker.textContent = t('sourceDetailsTitle');
+  kicker.style.cssText = 'font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#7dd3b7;';
+  card.appendChild(kicker);
+
+  const label = document.createElement('div');
+  label.textContent = info.text;
+  label.style.cssText = 'font-size:12px;font-weight:600;color:#f0fffa;';
+  card.appendChild(label);
+
+  if (source?.title) {
+    const title = document.createElement('div');
+    title.textContent = source.title;
+    title.style.cssText = 'font-size:12px;line-height:1.55;color:#d7e5df;';
+    card.appendChild(title);
+  }
+
+  if (url) {
+    const urlEl = document.createElement('div');
+    urlEl.textContent = url;
+    urlEl.style.cssText = 'font-size:11px;line-height:1.5;color:#7dd3b7;word-break:break-all;';
+    card.appendChild(urlEl);
+  }
+
+  if (source?.preview) {
+    const previewTitle = document.createElement('div');
+    previewTitle.textContent = t('sourcePreviewTitle');
+    previewTitle.style.cssText = 'font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#8ca29b;';
+    card.appendChild(previewTitle);
+
+    const preview = document.createElement('div');
+    preview.textContent = source.preview;
+    preview.style.cssText = 'font-size:12px;line-height:1.6;color:#cad7d2;white-space:pre-wrap;';
+    card.appendChild(preview);
+  }
+
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
+  const askBtn = createSourceDetailActionButton(t('sourceAskBtn'), !url && !summary);
+  askBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    attachSourceFollowupContext(source);
+  });
+  actions.appendChild(askBtn);
+  if (url) {
+    if (source?.preview || source?.title) {
+      const locateBtn = createSourceDetailActionButton(t('sourceLocateBtn'), true);
+      locateBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        await locateSourceInPage(source);
+      });
+      actions.appendChild(locateBtn);
+    }
+
+    const openBtn = createSourceDetailActionButton(t('sourceOpenBtn'), !(source?.preview || source?.title));
+    openBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const opened = await openSourceUrl(url);
+      toast(opened ? t('sourceOpened') : t('sourceUnavailable'));
+    });
+    actions.appendChild(openBtn);
+  }
+  if (summary) {
+    const copyBtn = createSourceDetailActionButton(t('sourceCopyBtn'), false);
+    copyBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await copySourceSummary(source);
+    });
+    actions.appendChild(copyBtn);
+  }
+  if (actions.childNodes.length) card.appendChild(actions);
+
+  return card;
+}
+
+function addBubbleFromMsg(m, idx, host = messagesEl) {
   const row = document.createElement('div');
   row.className = 'msg-row ' + (m.role === 'user' ? 'user' : 'ai');
   const av = document.createElement('div');
@@ -1442,15 +2499,27 @@ function addBubbleFromMsg(m, idx) {
   time.textContent = m.time ? new Date(m.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
 
   // Actions
+  const messageSources = m.role === 'assistant'
+    ? EasyChatCore.getMessageContextSources(m)
+    : [];
   const actions = document.createElement('div'); actions.className = 'msg-actions';
   actions.appendChild(makeActBtn(t('copy'), () => { navigator.clipboard.writeText(getPlainText(m.content)).then(() => toast(t('copied'))); }));
+  if (m.role === 'assistant' && canApplyAssistantMessage(m)) actions.appendChild(makeActBtn(t('applyToPage'), () => applyAssistantMessageToPage(m)));
+  if (messageSources.length > 1) actions.appendChild(makeActBtn(t('sourcesAskBtn'), () => attachSourcesFollowupContext(messageSources)));
   if (m.role === 'assistant') actions.appendChild(makeActBtn(t('regenerate'), () => regenerate(idx)));
   if (m.role === 'user') actions.appendChild(makeActBtn(t('editResend'), () => editAndResend(idx)));
   actions.appendChild(makeActBtn(t('deleteBtn'), () => deleteMessage(idx), true));
 
-  wrap.appendChild(bubble); wrap.appendChild(time); wrap.appendChild(actions);
+  const sourceBadges = m.role === 'assistant'
+    ? createSourceBadges(messageSources)
+    : null;
+
+  wrap.appendChild(bubble);
+  if (sourceBadges) wrap.appendChild(sourceBadges);
+  wrap.appendChild(time);
+  wrap.appendChild(actions);
   row.appendChild(av); row.appendChild(wrap);
-  messagesEl.appendChild(row);
+  host.appendChild(row);
   return bubble;
 }
 
@@ -1485,20 +2554,192 @@ async function regenerate(idx) {
 
 function addErrorBubble(msg) {
   const row = document.createElement('div'); row.className = 'msg-row ai';
-  const av = document.createElement('div'); av.className = 'avatar ai'; av.textContent = '✦';
+  const av = createAiAvatarElement();
   const bubble = document.createElement('div'); bubble.className = 'error-msg'; bubble.textContent = '⚠ ' + msg;
   row.appendChild(av); row.appendChild(bubble);
   messagesEl.appendChild(row); scrollBottom();
 }
-function showTyping() {
-  const row = document.createElement('div'); row.className = 'msg-row ai'; row.id = 'typing';
-  const av = document.createElement('div'); av.className = 'avatar ai'; av.textContent = '✦';
-  const bubble = document.createElement('div'); bubble.className = 'bubble typing-bubble';
-  bubble.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
-  row.appendChild(av); row.appendChild(bubble);
-  messagesEl.appendChild(row); scrollBottom();
+
+function createAiAvatarElement(extraClass = '') {
+  const av = document.createElement('div');
+  av.className = `avatar ai${extraClass ? ` ${extraClass}` : ''}`;
+  if (config.aiAvatar) {
+    const img = document.createElement('img');
+    img.src = config.aiAvatar;
+    av.appendChild(img);
+  } else {
+    av.textContent = '🤖';
+  }
+  return av;
 }
-function removeTyping() { const el = document.getElementById('typing'); if (el) el.remove(); }
+
+function setTypingPageContent(pageEl, pageLines) {
+  if (!pageEl) return;
+  const lines = pageEl.querySelectorAll('.typing-line');
+  const [line1 = '', line2 = ''] = pageLines || [];
+  if (lines[0]) lines[0].textContent = line1;
+  if (lines[1]) lines[1].textContent = line2;
+}
+
+function stopTypingAnimation(state = typingFlipState) {
+  if (state?.timer) clearInterval(state.timer);
+  if (!state) return;
+  state.timer = 0;
+  state.flipping = false;
+  state.deck = null;
+  state.currentPage = null;
+  state.nextPage = null;
+  state.pages = [];
+  state.index = 0;
+}
+
+function clearTypingFlipState() {
+  stopTypingAnimation(typingFlipState);
+  typingFlipState = null;
+}
+
+function ensureTypingState() {
+  let row = document.getElementById('typing');
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'typing-row';
+    row.id = 'typing';
+    const av = createAiAvatarElement('typing-avatar');
+    const stage = document.createElement('div');
+    stage.className = 'typing-stage';
+    row.appendChild(av);
+    row.appendChild(stage);
+    messagesEl.appendChild(row);
+  }
+
+  const stage = row.querySelector('.typing-stage');
+  if (!typingFlipState || typingFlipState.row !== row) {
+    stopTypingAnimation(typingFlipState);
+    typingFlipState = {
+      row,
+      stage,
+      mode: 'waiting',
+      deck: null,
+      currentPage: null,
+      nextPage: null,
+      pages: [],
+      index: 0,
+      flipping: false,
+      timer: 0
+    };
+  } else {
+    typingFlipState.stage = stage;
+  }
+
+  return typingFlipState;
+}
+
+function queueTypingFlip() {
+  const state = typingFlipState;
+  if (!state || state.mode !== 'reasoning' || state.flipping || state.pages.length < 2 || !state.deck) return;
+  const nextIndex = (state.index + 1) % state.pages.length;
+  setTypingPageContent(state.nextPage, state.pages[nextIndex]);
+  state.flipping = true;
+  state.deck.classList.add('flipping');
+  window.setTimeout(() => {
+    if (!typingFlipState || typingFlipState !== state) return;
+    setTypingPageContent(state.currentPage, state.pages[nextIndex]);
+    state.index = nextIndex;
+    state.flipping = false;
+    state.deck.classList.remove('flipping');
+  }, 460);
+}
+
+function renderWaitingRibbon(state) {
+  if (!state) return;
+  stopTypingAnimation(state);
+  state.mode = 'waiting';
+  state.stage.innerHTML = `
+    <div class="typing-ribbon" aria-hidden="true">
+      <span></span>
+      <span></span>
+      <span></span>
+    </div>
+  `;
+}
+
+function renderReasoningPreview(state, pages) {
+  if (!state) return;
+  stopTypingAnimation(state);
+  const activePages = Array.isArray(pages) ? pages.filter(page => Array.isArray(page) && page.some(Boolean)) : [];
+  if (!activePages.length) return;
+  state.mode = 'reasoning';
+  state.pages = activePages;
+  state.index = 0;
+  state.stage.innerHTML = `
+    <div class="typing-reasoning" aria-hidden="true">
+      <div class="typing-deck">
+        <div class="typing-sheet typing-sheet-current">
+          <div class="typing-line"></div>
+          <div class="typing-line typing-line-muted"></div>
+        </div>
+        <div class="typing-sheet typing-sheet-next">
+          <div class="typing-line"></div>
+          <div class="typing-line typing-line-muted"></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  state.deck = state.stage.querySelector('.typing-deck');
+  state.currentPage = state.stage.querySelector('.typing-sheet-current');
+  state.nextPage = state.stage.querySelector('.typing-sheet-next');
+  setTypingPageContent(state.currentPage, activePages[0]);
+  setTypingPageContent(state.nextPage, activePages[1] || activePages[0]);
+
+  if (activePages.length > 1) {
+    state.timer = window.setInterval(queueTypingFlip, 1500);
+  }
+}
+
+function showTyping() {
+  const state = ensureTypingState();
+  renderWaitingRibbon(state);
+  scrollBottom();
+}
+
+function showReasoningPreview(text, model) {
+  const pages = extractReasoningDisplayPages(text, model);
+  if (!pages.length) {
+    showTyping();
+    return;
+  }
+
+  const state = ensureTypingState();
+  if (state.mode !== 'reasoning') {
+    renderReasoningPreview(state, pages);
+    scrollBottom();
+    return;
+  }
+
+  state.pages = pages;
+  if (state.index >= pages.length) state.index = 0;
+
+  if (!state.flipping) {
+    setTypingPageContent(state.currentPage, state.pages[state.index]);
+    setTypingPageContent(state.nextPage, state.pages[(state.index + 1) % state.pages.length] || state.pages[state.index]);
+  }
+
+  if (pages.length < 2 && state.timer) {
+    clearInterval(state.timer);
+    state.timer = 0;
+  } else if (pages.length > 1 && !state.timer) {
+    state.timer = window.setInterval(queueTypingFlip, 1500);
+  }
+
+  scrollBottom();
+}
+
+function removeTyping() {
+  clearTypingFlipState();
+  const el = document.getElementById('typing');
+  if (el) el.remove();
+}
 
 function toApiContent(content) {
   return EasyChatCore.toApiContent(content);
@@ -1508,18 +2749,30 @@ function toApiContent(content) {
 async function send() {
   if (streaming) return;
   const text = userInput.value.trim();
-  if (!text && !attachments.length) return;
+  const ctx = draftSourceContext;
+  if (!text && !attachments.length && !ctx) return;
   if (!config.apiKey) { overlay.classList.add('show'); return; }
   if (!currentId) newChat();
   const s = current();
   const w = messagesEl.querySelector('.welcome');
   if (w) w.remove();
 
+  const apiText = ctx ? ctx.promptFn(text) : text;
+  const displayText = EasyChatCore.buildDisplayText({
+    context: ctx,
+    userText: text,
+    webSearchEnabled
+  });
+
   const userMsg = EasyChatCore.createUserMessage({
-    text,
+    text: apiText,
     imageUrls: attachments.filter(a => a.type === 'image').map(a => `data:${a.mimeType};base64,${a.base64}`),
     fileAttachments: attachments.filter(a => a.type === 'file').map(a => ({ name: a.name, text: a.text })),
+    display: displayText,
     meta: EasyChatCore.buildMessageMeta({
+      contextAction: ctx?.type,
+      contextLabel: ctx?.label,
+      sources: [...(ctx?.meta?.contextSources || [])],
       imageAttachments: attachments.filter(a => a.type === 'image').map(a => ({
         kind: 'image',
         label: a.name || '图片',
@@ -1535,9 +2788,14 @@ async function send() {
     time: Date.now()
   });
   s.messages.push(userMsg);
-  if (s.messages.length === 1) { s.title = (text || attachments[0]?.name || t('newChat')).slice(0, 28); topbarTitle.textContent = s.title; }
+  if (s.messages.length === 1) {
+    s.title = (text || ctx?.label || attachments[0]?.name || t('newChat')).slice(0, 28);
+    topbarTitle.textContent = s.title;
+  }
   addBubbleFromMsg(userMsg, s.messages.length - 1);
   userInput.value = ''; userInput.style.height = 'auto';
+  draftSourceContext = null;
+  renderDraftContextTag();
   attachments = []; renderAttachments();
   save(); renderHistory(); updateStats(); autoScroll = true;
 
@@ -1546,19 +2804,28 @@ async function send() {
   if (webSearchEnabled && text) {
     showTyping(); // Show typing indicator during search
     searchResult = await tavilySearch(text);
-    removeTyping();
+    const searchSources = EasyChatCore.getSearchResultSources(searchResult);
+    if (searchSources.length) {
+      userMsg.meta = userMsg.meta || {};
+      userMsg.meta.contextSources = EasyChatCore.dedupeContextSources([
+        ...(userMsg.meta.contextSources || []).filter(source => source.kind !== 'web_search'),
+        ...searchSources
+      ]);
+      save();
+    }
   }
 
   await doRequest(s, searchResult);
 }
 
 async function doRequest(s, searchResult = null) {
-  streaming = true; sendBtn.style.display = 'none'; stopBtn.style.display = 'flex';
-  if (!searchResult) showTyping(); // Only show typing if not already shown
+  streaming = true; sendBtn.style.display = 'none'; stopBtn.style.display = 'flex'; showTyping();
   abortController = new AbortController();
 
   const baseUrl = EasyChatCore.normalizeBaseUrl(config.baseUrl);
   const model = getModel();
+  const turnContext = EasyChatCore.resolveTurnContext(s.messages, { includeWebSearch: !!searchResult });
+  const assistantMeta = EasyChatCore.buildAssistantMetaFromContext(turnContext);
 
   // Build messages with context limit
   let msgs = s.messages.map(m => ({ role: m.role, content: toApiContent(m.content) }));
@@ -1568,7 +2835,8 @@ async function doRequest(s, searchResult = null) {
 
   // Prepend system prompt
   const formatInstruction = 'Always format your responses using Markdown: use ## or ### for section headings, **bold** for key terms, bullet points or numbered lists for enumerations, and ``` code blocks ``` for any code. Structure longer answers with clear headings and sections.';
-  const sysContent = EasyChatCore.buildSystemMessage(config.systemPrompt, formatInstruction, formatInstruction);
+  const promptTail = [formatInstruction, EasyChatCore.buildSourceAwareInstruction(turnContext)].filter(Boolean).join('\n\n');
+  const sysContent = EasyChatCore.buildSystemMessage(config.systemPrompt, promptTail, promptTail);
   msgs = [{ role: 'system', content: sysContent }, ...msgs];
 
   const body = EasyChatCore.buildChatRequestBody({
@@ -1582,6 +2850,8 @@ async function doRequest(s, searchResult = null) {
     maxTokens: config.maxTokens
   });
 
+  let bubble = null;
+
   try {
     // Non-streaming mode
     if (!config.streamEnabled) {
@@ -1592,14 +2862,16 @@ async function doRequest(s, searchResult = null) {
         signal: abortController.signal
       });
       removeTyping();
-      const content = data.choices?.[0]?.message?.content || '';
+      const rawContent = data.choices?.[0]?.message?.content || '';
+      const content = sanitizeVisibleReasoningText(rawContent, model).trim() || extractStreamableAnswerText(rawContent, model).trim();
+      if (!content) throw new Error('模型未返回可显示正文');
 
       // Record token usage
       if (data.usage) {
         recordTokenUsage(model, data.usage);
       }
 
-      const aiMsg = EasyChatCore.createAssistantMessage({ content, time: Date.now() });
+      const aiMsg = EasyChatCore.createAssistantMessage({ content, time: Date.now(), meta: assistantMeta });
       s.messages.push(aiMsg);
       save(); updateStats();
       addBubbleFromMsg(aiMsg, s.messages.length - 1);
@@ -1608,50 +2880,77 @@ async function doRequest(s, searchResult = null) {
     }
 
     // Streaming mode with real-time markdown rendering
-    const row = document.createElement('div'); row.className = 'msg-row ai';
-    const av = document.createElement('div'); av.className = 'avatar ai';
-    if (config.aiAvatar) {
-      const img = document.createElement('img');
-      img.src = config.aiAvatar;
-      av.appendChild(img);
-    } else {
-      av.textContent = '🤖';
+    let full = '';
+    let row = null;
+    let wrap = null;
+    let mdBubble = null;
+    function ensureAssistantBubble() {
+      if (bubble) return;
+      removeTyping();
+      row = document.createElement('div'); row.className = 'msg-row ai';
+      const av = createAiAvatarElement();
+      wrap = document.createElement('div'); wrap.className = 'bubble-wrap';
+      bubble = document.createElement('div'); bubble.className = 'bubble';
+      wrap.appendChild(bubble); row.appendChild(av); row.appendChild(wrap);
+      messagesEl.appendChild(row);
     }
-    const wrap = document.createElement('div'); wrap.className = 'bubble-wrap';
-    const bubble = document.createElement('div'); bubble.className = 'bubble md';
-    wrap.appendChild(bubble); row.appendChild(av); row.appendChild(wrap);
-    messagesEl.appendChild(row);
-
     let lastRenderTime = 0;
     const RENDER_INTERVAL = 100; // Render markdown every 100ms
-    removeTyping();
-    const { full, usage: usageData } = await EasyChatCore.streamChatCompletion({
+    const { full: streamedFull, usage: usageData } = await EasyChatCore.streamChatCompletion({
       baseUrl,
       apiKey: config.apiKey,
       body,
       signal: abortController.signal,
-      onChunk: ({ delta, full }) => {
+      onChunk: ({ delta, full: chunkFull }) => {
+        if (!delta) return;
+        full = chunkFull;
+        const visibleText = extractStreamableAnswerText(full, model).trim();
+        if (!visibleText) {
+          showReasoningPreview(full, model);
+          chrome.runtime.sendMessage({ type: 'CHAT_CHUNK', full: '', rawFull: full, model, sessionId: s.id }).catch(() => {});
+          scrollBottom();
+          return;
+        }
         const now = Date.now();
         if (now - lastRenderTime > RENDER_INTERVAL) {
-          const mdBubble = renderMarkdown(full);
-          if (mdBubble) {
-            bubble.innerHTML = mdBubble.innerHTML;
+          ensureAssistantBubble();
+          const rendered = renderMarkdown(visibleText, { useCache: false, bind: false });
+          if (rendered) {
+            if (!mdBubble) {
+              bindMarkdownInteractions(rendered);
+              bubble.replaceWith(rendered);
+              mdBubble = rendered;
+            } else {
+              applyRenderedMarkdown(mdBubble, rendered);
+            }
           } else {
-            bubble.textContent = full;
+            (mdBubble || bubble).textContent = visibleText;
           }
           lastRenderTime = now;
-          if (delta) chrome.runtime.sendMessage({ type: 'CHAT_CHUNK', full, sessionId: s.id }).catch(() => {});
+          chrome.runtime.sendMessage({ type: 'CHAT_CHUNK', full: visibleText, rawFull: full, model, sessionId: s.id }).catch(() => {});
         }
         scrollBottom();
       }
     });
+    full = streamedFull;
 
-    // Final render
-    const mdBubble = renderMarkdown(full);
-    if (mdBubble) {
-      bubble.innerHTML = mdBubble.innerHTML;
+    const finalText = sanitizeVisibleReasoningText(full, model).trim() || extractStreamableAnswerText(full, model).trim();
+    if (!finalText) {
+      removeTyping();
+      throw new Error('模型未返回可显示正文');
+    }
+    ensureAssistantBubble();
+    const finalRendered = renderMarkdown(finalText, { bind: false });
+    if (finalRendered) {
+      if (!mdBubble) {
+        bindMarkdownInteractions(finalRendered);
+        bubble.replaceWith(finalRendered);
+        mdBubble = finalRendered;
+      } else {
+        applyRenderedMarkdown(mdBubble, finalRendered);
+      }
     } else {
-      bubble.textContent = full;
+      (mdBubble || bubble).textContent = finalText;
     }
 
     // Record token usage if available
@@ -1659,24 +2958,35 @@ async function doRequest(s, searchResult = null) {
       recordTokenUsage(model, usageData);
     }
 
-    const aiMsg = EasyChatCore.createAssistantMessage({ content: full, time: Date.now() });
+    const aiMsg = EasyChatCore.createAssistantMessage({ content: finalText, time: Date.now(), meta: assistantMeta });
     const idx = s.messages.length;
     s.messages.push(aiMsg); save(); updateStats();
     // Notify popup that streaming is done
-    chrome.runtime.sendMessage({ type: 'CHAT_DONE', full, sessionId: s.id }).catch(() => {});
+    chrome.runtime.sendMessage({ type: 'CHAT_DONE', full: finalText, rawFull: full, model, sessionId: s.id }).catch(() => {});
 
     // Time + actions
+    const sourceBadges = createSourceBadges(aiMsg.meta?.contextSources);
     const time = document.createElement('div'); time.className = 'msg-time';
     time.textContent = new Date(aiMsg.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     const actions = document.createElement('div'); actions.className = 'msg-actions';
-    actions.appendChild(makeActBtn(t('copy'), () => { navigator.clipboard.writeText(full).then(() => toast(t('copied'))); }));
+    actions.appendChild(makeActBtn(t('copy'), () => { navigator.clipboard.writeText(finalText).then(() => toast(t('copied'))); }));
+    if (canApplyAssistantMessage(aiMsg)) actions.appendChild(makeActBtn(t('applyToPage'), () => applyAssistantMessageToPage(aiMsg)));
+    if ((aiMsg.meta?.contextSources?.length || 0) > 1) actions.appendChild(makeActBtn(t('sourcesAskBtn'), () => attachSourcesFollowupContext(aiMsg.meta.contextSources)));
     actions.appendChild(makeActBtn(t('regenerate'), () => regenerate(idx)));
     actions.appendChild(makeActBtn(t('deleteBtn'), () => deleteMessage(idx), true));
+    if (sourceBadges) wrap.appendChild(sourceBadges);
     wrap.appendChild(time); wrap.appendChild(actions);
 
   } catch (err) {
     removeTyping();
-    if (err.name !== 'AbortError') addErrorBubble(err.message);
+    if (err.name !== 'AbortError') {
+      if (bubble) {
+        bubble.className = 'error-msg';
+        bubble.textContent = '⚠ ' + err.message;
+      } else {
+        addErrorBubble(err.message);
+      }
+    }
     else toast(t('generationStopped'));
   } finally {
     streaming = false; abortController = null;
@@ -2001,6 +3311,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'OPEN_CHAT_SESSION') {
+    const sessionId = String(msg.sessionId || '');
+    if (!sessionId || !sessions.find(s => s.id === sessionId)) {
+      sendResponse({ ok: false, error: 'session_not_found' });
+      return true;
+    }
+    loadSession(sessionId, { syncStorage: false, forceRender: true });
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (msg.type !== 'PROXY_SEND') return false;
 
   const { sessionId, messages, searchResult, cfg } = msg;
@@ -2012,42 +3333,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sessions.unshift(s);
   }
   s.messages = messages;
-
-  // Switch to this session in UI
-  const isCurrentSession = currentId === sessionId;
-  if (!isCurrentSession) {
-    currentId = sessionId;
-    chrome.storage.local.set({ currentId });
-    renderHistory();
-    renderMessages(s.messages);
-    topbarTitle.textContent = s.title || t('newChat');
-  }
+  const mirrorProxyUi = currentId === sessionId;
 
   // Merge config overrides (apiKey, model, etc from popup profile)
   const savedConfig = { ...config };
   Object.assign(config, cfg);
-
-  // Create a live AI bubble in the main UI for streaming updates
-  const proxyAiRow = document.createElement('div');
-  proxyAiRow.className = 'msg-row ai';
-  const proxyAv = document.createElement('div');
-  proxyAv.className = 'avatar ai';
-  if (config.aiAvatar) {
-    const img = document.createElement('img'); img.src = config.aiAvatar; proxyAv.appendChild(img);
-  } else { proxyAv.textContent = '🤖'; }
-  const proxyWrap = document.createElement('div'); proxyWrap.className = 'bubble-wrap';
-  const proxyBubble = document.createElement('div'); proxyBubble.className = 'bubble';
-  proxyBubble.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-  proxyWrap.appendChild(proxyBubble);
-  proxyAiRow.appendChild(proxyAv); proxyAiRow.appendChild(proxyWrap);
-  messagesEl.appendChild(proxyAiRow);
-  scrollBottom();
+  if (mirrorProxyUi) showTyping();
 
   // Run the request, streaming chunks back to popup via background
   (async () => {
     proxyStreaming = true;
     const baseUrl = EasyChatCore.normalizeBaseUrl(config.baseUrl);
     const model = getModel();
+    const turnContext = EasyChatCore.resolveTurnContext(s.messages, { includeWebSearch: !!searchResult });
+    const assistantMeta = EasyChatCore.buildAssistantMetaFromContext(turnContext);
 
     let apiMsgs = s.messages.map(m => ({ role: m.role, content: toApiContent(m.content) }));
     if (config.contextLimit) apiMsgs = apiMsgs.slice(-parseInt(config.contextLimit));
@@ -2055,7 +3354,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     EasyChatCore.appendSearchResultToLastUserMessage(apiMsgs, searchResult, '联网搜索结果');
 
     const formatInstruction = 'Always format your responses using Markdown.';
-    const sysContent = EasyChatCore.buildSystemMessage(config.systemPrompt, formatInstruction, formatInstruction);
+    const promptTail = [formatInstruction, EasyChatCore.buildSourceAwareInstruction(turnContext)].filter(Boolean).join('\n\n');
+    const sysContent = EasyChatCore.buildSystemMessage(config.systemPrompt, promptTail, promptTail);
     apiMsgs = [{ role: 'system', content: sysContent }, ...apiMsgs];
 
     const body = EasyChatCore.buildChatRequestBody({
@@ -2069,50 +3369,111 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       maxTokens: config.maxTokens
     });
 
+    let full = '';
+    let proxyRow = null;
+    let proxyWrap = null;
+    let proxyBubble = null;
+    let proxyMdBubble = null;
+    function ensureProxyAssistantBubble() {
+      if (!mirrorProxyUi) return null;
+      if (proxyBubble) return;
+      removeTyping();
+      proxyRow = document.createElement('div');
+      proxyRow.className = 'msg-row ai';
+      proxyWrap = document.createElement('div');
+      proxyWrap.className = 'bubble-wrap';
+      proxyBubble = document.createElement('div');
+      proxyBubble.className = 'bubble';
+      proxyWrap.appendChild(proxyBubble);
+      proxyRow.appendChild(createAiAvatarElement());
+      proxyRow.appendChild(proxyWrap);
+      messagesEl.appendChild(proxyRow);
+    }
     let lastRender = 0;
     try {
-      const { full } = await EasyChatCore.streamChatCompletion({
+      const { full: streamedFull } = await EasyChatCore.streamChatCompletion({
         baseUrl,
         apiKey: config.apiKey,
         body,
-        onChunk: ({ delta, full }) => {
+        onChunk: ({ delta, full: chunkFull }) => {
           if (!delta) return;
-          chrome.runtime.sendMessage({ type: 'PROXY_CHUNK', delta, full });
+          full = chunkFull;
+          const visibleText = extractStreamableAnswerText(full, model).trim();
+          if (!visibleText) {
+            if (mirrorProxyUi) {
+              showReasoningPreview(full, model);
+              scrollBottom();
+            }
+            chrome.runtime.sendMessage({ type: 'PROXY_CHUNK', delta: '', full: '', rawFull: full, model });
+            return;
+          }
           const now = Date.now();
           if (now - lastRender > 80) {
-            const rendered = renderMarkdown(full);
-            if (rendered) {
-              proxyBubble.className = rendered.className;
-              proxyBubble.innerHTML = rendered.innerHTML;
-            } else {
-              proxyBubble.textContent = full;
+            if (mirrorProxyUi) {
+              ensureProxyAssistantBubble();
+              const rendered = renderMarkdown(visibleText, { useCache: false, bind: false });
+              if (rendered) {
+                if (!proxyMdBubble) {
+                  bindMarkdownInteractions(rendered);
+                  proxyBubble.replaceWith(rendered);
+                  proxyMdBubble = rendered;
+                } else {
+                  applyRenderedMarkdown(proxyMdBubble, rendered);
+                }
+              } else {
+                (proxyMdBubble || proxyBubble).textContent = visibleText;
+              }
+              scrollBottom();
             }
+            chrome.runtime.sendMessage({ type: 'PROXY_CHUNK', delta, full: visibleText, rawFull: full, model });
             lastRender = now;
-            scrollBottom();
           }
         }
       });
+      full = streamedFull;
 
-      // Final render of the completed response
-      const rendered = renderMarkdown(full);
-      if (rendered) {
-        proxyBubble.className = rendered.className;
-        proxyBubble.innerHTML = rendered.innerHTML;
-      } else {
-        proxyBubble.textContent = full;
+      const finalText = sanitizeVisibleReasoningText(full, model).trim() || extractStreamableAnswerText(full, model).trim();
+      if (!finalText) {
+        if (mirrorProxyUi) removeTyping();
+        throw new Error('模型未返回可显示正文');
       }
-      scrollBottom();
+      if (mirrorProxyUi) {
+        ensureProxyAssistantBubble();
+        const rendered = renderMarkdown(finalText, { bind: false });
+        if (rendered) {
+          if (!proxyMdBubble) {
+            bindMarkdownInteractions(rendered);
+            proxyBubble.replaceWith(rendered);
+            proxyMdBubble = rendered;
+          } else {
+            applyRenderedMarkdown(proxyMdBubble, rendered);
+          }
+        } else {
+          (proxyMdBubble || proxyBubble).textContent = finalText;
+        }
+        const sourceBadges = createSourceBadges(assistantMeta.contextSources);
+        if (sourceBadges) proxyWrap.appendChild(sourceBadges);
+        scrollBottom();
+      }
 
       // Save AI response into session
-      const aiMsg = EasyChatCore.createAssistantMessage({ content: full, time: Date.now() });
+      const aiMsg = EasyChatCore.createAssistantMessage({ content: finalText, time: Date.now(), meta: assistantMeta });
       s.messages.push(aiMsg);
       save();
       renderHistory();
       updateStats();
 
-      chrome.runtime.sendMessage({ type: 'PROXY_DONE', full, sessionId });
+      chrome.runtime.sendMessage({ type: 'PROXY_DONE', full: finalText, rawFull: full, model, sessionId });
     } catch (e) {
-      proxyBubble.textContent = '错误: ' + e.message;
+      if (mirrorProxyUi) {
+        removeTyping();
+        if (proxyBubble) {
+          proxyBubble.className = 'error-msg';
+          proxyBubble.textContent = '⚠ ' + e.message;
+        } else {
+          addErrorBubble(e.message);
+        }
+      }
       chrome.runtime.sendMessage({ type: 'PROXY_ERROR', error: e.message });
     } finally {
       proxyStreaming = false;

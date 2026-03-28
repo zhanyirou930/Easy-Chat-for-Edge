@@ -1,5 +1,35 @@
 # EasyChat for Edge - Changelog
 
+## Unreleased Fixes
+
+### 三入口会话同步策略重构
+- `popup`、`sidebar`、`full window` 不再共用一个“当前会话”指针
+- 现在改为“打开时同步一次，打开后各自独立”
+- `popup -> full window`
+- `popup -> sidebar`
+- `sidebar -> full window`
+  这些链路都会在打开时带过去当前会话，但打开后切换不再互相跟随
+
+### 后台流接管与 loading 恢复修复
+- 修复了 `popup` 发消息后立刻打开 `sidebar / full window` 时 loading 消失的问题
+- 当后台流已接上但还没有可展示正文时，新入口会稳定显示等待条
+- `popup` 关闭后，后台流仍可继续，重新打开入口后可以继续恢复显示
+
+### `popup` 代发消息不再强制跳转其它入口
+- `popup` 借 `full window` 代理发送消息时，不会再把 `full window` 强制切到那条会话
+- 如果 `full window` 当前本来就在该会话，仍然会继续显示对应的流式回复
+- 如果当前看的不是该会话，则只后台执行并写回会话数据，不改变视图
+
+### `full window` 会话切换性能优化
+- 减少了切会话时对 storage 的整包写入
+- 历史列表 active 态改为轻量更新
+- 消息区重绘改为批量挂载
+- assistant markdown 渲染增加了有上限的缓存，重复切换长对话时卡顿更轻
+
+### 已知状态
+- JS 语法检查已通过：`background.js`、`chat.js`、`popup.js`
+- 仍需 Edge 浏览器内的完整人工回归
+
 ## Latest Features v2.0
 
 ### 🎭 Local Avatar Upload System
@@ -157,6 +187,3 @@
 - `icons/ai_avatar.jpg` - Removed potentially infringing AI avatar
 - `icons/peek.png` - Removed potentially infringing decorative image
 - `icons/peek_hand.png` - Removed potentially infringing decorative image
-
-## Open Source Ready
-This version is ready for open source release. All features have been tested and work properly. All potentially infringing content has been removed.
