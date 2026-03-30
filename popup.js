@@ -73,6 +73,8 @@ chrome.storage.local.get(['profiles', 'currentProfile', 'sessions', 'currentPopu
     searchEngine: profile.searchEngine || savedConfig.searchEngine || 'tavily',
     searchApiKey: profile.searchApiKey || savedConfig.searchApiKey || '',
     customSearchUrl: profile.customSearchUrl || savedConfig.customSearchUrl || '',
+    customSearchUrl2: profile.customSearchUrl2 || savedConfig.customSearchUrl2 || '',
+    customSearchUrl3: profile.customSearchUrl3 || savedConfig.customSearchUrl3 || '',
   };
 
   // Apply language
@@ -377,6 +379,17 @@ function clearBackgroundStreamUi() {
   removeTyping();
 }
 
+let _subtitleTimer = 0;
+function animateSubtitle(el, text) {
+  clearInterval(_subtitleTimer);
+  el.textContent = '';
+  let i = 0;
+  _subtitleTimer = setInterval(() => {
+    if (i >= text.length) { clearInterval(_subtitleTimer); _subtitleTimer = 0; return; }
+    el.textContent += text[i++];
+  }, 30);
+}
+
 function renderBackgroundAgentBubble(bubble, task) {
   const L = LANG[config.language] || LANG.zh;
   bubble.className = 'msg-bubble thinking-bubble';
@@ -384,6 +397,18 @@ function renderBackgroundAgentBubble(bubble, task) {
     task?.title || L.thinkingTitle || 'AI 正在思考',
     task?.subtitle || L.thinkingHint || '请求已发出，正在等待回复'
   );
+  // Phase color
+  const sub = task?.subtitle || '';
+  const deck = bubble.querySelector('.thinking-shell');
+  if (deck) {
+    deck.classList.remove('phase-planning', 'phase-reading', 'phase-working');
+    if (/规划|Planning|plan/i.test(sub)) deck.classList.add('phase-planning');
+    else if (/读取|Reading|read/i.test(sub)) deck.classList.add('phase-reading');
+    else if (/执行|Running|run/i.test(sub)) deck.classList.add('phase-working');
+  }
+  // Typewriter subtitle
+  const subEl = bubble.querySelector('.thinking-sub');
+  if (subEl && sub) animateSubtitle(subEl, sub);
 }
 
 function showBackgroundAgentTask(task) {
@@ -439,6 +464,52 @@ async function restoreBackgroundAgentTaskForCurrentSession() {
   if (isStoppingSession(currentId)) return;
   setBackgroundAgentControls(currentId);
   showBackgroundAgentTask(task);
+}
+
+async function restoreAnnotateForCurrentSession() {
+  if (!currentId) return;
+  const res = await bgMessage({ type: 'GET_ACTIVE_ANNOTATE', sessionId: currentId }).catch(() => null);
+  if (!res?.active) return;
+  setToolLoading('btnAnnotate', true);
+  showTyping();
+  const sid = currentId;
+  abortController = {
+    type: 'annotate',
+    sessionId: sid,
+    abort() {
+      bgMessage({ type: 'STOP_ANNOTATE_TASK', sessionId: sid }).catch(() => {});
+    }
+  };
+  streaming = true;
+  sendBtn.style.display = 'none';
+  stopBtn.style.display = 'flex';
+  const s = currentSession();
+  const onMsg = (msg) => {
+    if (msg.sessionId !== sid) return;
+    if (msg.type === 'ANNOTATE_DONE') {
+      chrome.runtime.onMessage.removeListener(onMsg);
+      setToolLoading('btnAnnotate', false);
+      resetActiveStreamUi();
+      const reply = `已在页面添加 ${msg.annotations.length} 个标注气泡 📌`;
+      const replyBubble = addBubble('ai', '');
+      renderBubble(replyBubble, reply);
+      if (s) {
+        appendSourceBadges(replyBubble, EasyChatCore.getMessageContextSources(s.messages[s.messages.length - 1]));
+        s.messages.push(EasyChatCore.createAssistantMessage({
+          content: msg.result, display: reply,
+          meta: { annotationCount: msg.annotations.length, contextSources: EasyChatCore.getMessageContextSources(s.messages[s.messages.length - 1]) }
+        }));
+        save();
+      }
+    }
+    if (msg.type === 'ANNOTATE_ERROR') {
+      chrome.runtime.onMessage.removeListener(onMsg);
+      setToolLoading('btnAnnotate', false);
+      resetActiveStreamUi();
+      addBubble('ai', '标注失败: ' + msg.error);
+    }
+  };
+  chrome.runtime.onMessage.addListener(onMsg);
 }
 
 async function restoreBackgroundStreamForCurrentSession() {
@@ -970,7 +1041,7 @@ function buildDirectToolRoutePrompt(question, tab) {
     '只返回 JSON，不要 markdown，不要解释。',
     '可选 mode 只有四种：chat、browser_action、recent_history_answer、recent_history_compare。',
     '如果只是普通聊天、解释、总结、翻译，返回 {"mode":"chat"}。',
-    '如果需要打开网页、点击、输入、滚动、查看当前页面、打开最近访问的网站，返回 {"mode":"browser_action","instruction":"..."}。',
+    '如果需要打开网页、点击、输入、滚动、查看当前页面、打开最近访问的网站，返回 {"mode":"browser_action","instruction":"..."}。instruction 必须是明确的操作目标（如网站名、URL、按钮名），不能是"对哇""好的""确认""就是它"等口语确认词。',
     '如果是在问最近看过/浏览过/访问过的内容，但不需要操作页面，只需要根据最近浏览记录回答，返回 {"mode":"recent_history_answer","query":"关键词"}。',
     '如果是在问最近看过的几个东西有什么区别、哪个好、怎么选，返回 {"mode":"recent_history_compare","query":"关键词"}。',
     'query 要尽量短，只保留核心检索词，例如“牙刷”“penguin api”“路由器”。',
@@ -1051,6 +1122,7 @@ function loadSession(id) {
   if (s) renderMessages(s.messages);
   restoreBackgroundAgentTaskForCurrentSession().catch(() => {});
   restoreBackgroundStreamForCurrentSession().catch(() => {});
+  restoreAnnotateForCurrentSession().catch(() => {});
 }
 
 function renderSessionList() {
@@ -1381,6 +1453,148 @@ document.getElementById('btnRewrite').addEventListener('click', () => handleCont
 document.getElementById('btnSummarize').addEventListener('click', () => handleContextAttach('summarize'));
 document.getElementById('btnAnnotate').addEventListener('click', handleAnnotate);
 
+// ── Export conversation ──
+document.getElementById('btnExport')?.addEventListener('click', exportConversation);
+
+function exportConversation() {
+  const s = currentSession();
+  const L = LANG[config.language] || LANG.zh;
+  if (!s || !s.messages.length) { toast('没有可导出的对话'); return; }
+  const lines = [`# ${s.title || '对话记录'}`, ''];
+  s.messages.forEach(m => {
+    if (m.role === 'system') return;
+    const role = m.role === 'assistant' ? (config.language === 'en' ? '**AI**' : '**AI**') : (config.language === 'en' ? '**You**' : '**你**');
+    const text = EasyChatCore.extractPlainText(m.content) || m.display || '';
+    if (!text.trim()) return;
+    lines.push(`${role}\n\n${text.trim()}`, '');
+    lines.push('---', '');
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(s.title || 'chat').replace(/[\\/:*?"<>|]/g, '_')}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(config.language === 'en' ? 'Exported' : '已导出');
+}
+
+// ── Copy button on AI bubbles ──
+function appendCopyButton(bubble, message) {
+  if (message.display) return; // browser action results etc.
+  const text = EasyChatCore.extractPlainText(message.content);
+  if (!text.trim()) return;
+  const btn = document.createElement('button');
+  btn.className = 'msg-copy-btn';
+  btn.textContent = config.language === 'en' ? 'Copy' : '复制';
+  btn.title = config.language === 'en' ? 'Copy message' : '复制消息';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text.trim()).then(() => {
+      btn.textContent = config.language === 'en' ? 'Copied!' : '已复制';
+      setTimeout(() => { btn.textContent = config.language === 'en' ? 'Copy' : '复制'; }, 1500);
+    }).catch(() => toast(config.language === 'en' ? 'Copy failed' : '复制失败'));
+  });
+  bubble.appendChild(btn);
+}
+
+// ── Slash prompt menu ──
+const SLASH_PROMPTS = [
+  { cmd: '/总结', desc: '总结当前内容', text: '请帮我总结以下内容的核心要点：' },
+  { cmd: '/翻译', desc: '翻译成中文/英文', text: '请翻译以下内容：' },
+  { cmd: '/改写', desc: '改写得更清晰', text: '请改写以下内容，使其更清晰简洁：' },
+  { cmd: '/解释', desc: '解释这段内容', text: '请用简单易懂的语言解释：' },
+  { cmd: '/代码', desc: '帮我写代码', text: '请帮我写代码实现：' },
+  { cmd: '/续写', desc: '续写内容', text: '请续写以下内容：' },
+];
+
+let slashMenuIndex = 0;
+let slashMenuVisible = false;
+
+function getSlashMenu() { return document.getElementById('slashMenu'); }
+
+function showSlashMenu(filter) {
+  const menu = getSlashMenu();
+  if (!menu) return;
+  const items = filter
+    ? SLASH_PROMPTS.filter(p => p.cmd.includes(filter) || p.desc.includes(filter))
+    : SLASH_PROMPTS;
+  if (!items.length) { hideSlashMenu(); return; }
+  menu.innerHTML = '';
+  slashMenuIndex = 0;
+  items.forEach((p, i) => {
+    const item = document.createElement('div');
+    item.className = 'slash-menu-item' + (i === 0 ? ' active' : '');
+    item.innerHTML = `<span class="slash-cmd">${p.cmd}</span><span class="slash-desc">${p.desc}</span>`;
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      applySlashPrompt(p);
+    });
+    menu.appendChild(item);
+  });
+  menu.style.display = 'block';
+  slashMenuVisible = true;
+}
+
+function hideSlashMenu() {
+  const menu = getSlashMenu();
+  if (menu) menu.style.display = 'none';
+  slashMenuVisible = false;
+  slashMenuIndex = 0;
+}
+
+function applySlashPrompt(p) {
+  quickInput.value = p.text + ' ';
+  quickInput.style.height = 'auto';
+  quickInput.style.height = quickInput.scrollHeight + 'px';
+  hideSlashMenu();
+  quickInput.focus();
+  quickInput.setSelectionRange(quickInput.value.length, quickInput.value.length);
+}
+
+quickInput.addEventListener('input', () => {
+  const val = quickInput.value;
+  if (val.startsWith('/')) {
+    showSlashMenu(val.length > 1 ? val : '');
+  } else {
+    hideSlashMenu();
+  }
+});
+
+quickInput.addEventListener('keydown', (e) => {
+  if (!slashMenuVisible) return;
+  const menu = getSlashMenu();
+  const items = menu ? menu.querySelectorAll('.slash-menu-item') : [];
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    items[slashMenuIndex]?.classList.remove('active');
+    slashMenuIndex = (slashMenuIndex + 1) % items.length;
+    items[slashMenuIndex]?.classList.add('active');
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    items[slashMenuIndex]?.classList.remove('active');
+    slashMenuIndex = (slashMenuIndex - 1 + items.length) % items.length;
+    items[slashMenuIndex]?.classList.add('active');
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    const activeItem = items[slashMenuIndex];
+    if (activeItem) {
+      e.preventDefault();
+      const cmd = activeItem.querySelector('.slash-cmd')?.textContent || '';
+      const p = SLASH_PROMPTS.find(x => x.cmd === cmd);
+      if (p) applySlashPrompt(p);
+    }
+  } else if (e.key === 'Escape') {
+    hideSlashMenu();
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (slashMenuVisible && !e.target.closest('#slashMenu') && e.target !== quickInput) {
+    hideSlashMenu();
+  }
+});
+
 document.getElementById('btnWebSearch').addEventListener('click', () => {
   webSearchEnabled = !webSearchEnabled;
   chrome.storage.local.set({ webSearchEnabled });
@@ -1539,30 +1753,58 @@ async function handleAnnotate() {
       })]
     })
   }));
+  save();
 
-  try {
-    const result = await callOnce(prompt);
-    setToolLoading('btnAnnotate', false);
-    const jsonMatch = result.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) { addBubble('ai', '无法解析标注结果'); return; }
-    const annotations = JSON.parse(jsonMatch[0]);
-    await tabMessage(tab.id, { type: 'SET_ANNOTATIONS', annotations });
-    const reply = `已在页面添加 ${annotations.length} 个标注气泡 📌`;
-    const replyBubble = addBubble('ai', reply);
-    appendSourceBadges(replyBubble, EasyChatCore.getMessageContextSources(s.messages[s.messages.length - 1]));
-    s.messages.push(EasyChatCore.createAssistantMessage({
-      content: result,
-      display: reply,
-      meta: {
-        annotationCount: annotations.length,
-        contextSources: EasyChatCore.getMessageContextSources(s.messages[s.messages.length - 1])
-      }
-    }));
-    save();
-  } catch (e) {
-    setToolLoading('btnAnnotate', false);
-    addBubble('ai', '标注失败: ' + e.message);
-  }
+  // Show loading — same wave ribbon as normal message sending
+  showTyping();
+
+  const annotateSessionId = s.id;
+  abortController = {
+    type: 'annotate',
+    sessionId: annotateSessionId,
+    abort() {
+      bgMessage({ type: 'STOP_ANNOTATE_TASK', sessionId: annotateSessionId }).catch(() => {});
+    }
+  };
+  streaming = true;
+  sendBtn.style.display = 'none';
+  stopBtn.style.display = 'flex';
+
+  const onAnnotateMsg = (msg) => {
+    if (msg.type === 'ANNOTATE_DONE' && msg.sessionId === annotateSessionId) {
+      chrome.runtime.onMessage.removeListener(onAnnotateMsg);
+      setToolLoading('btnAnnotate', false);
+      resetActiveStreamUi();
+      const reply = `已在页面添加 ${msg.annotations.length} 个标注气泡 📌`;
+      const replyBubble = addBubble('ai', '');
+      renderBubble(replyBubble, reply);
+      appendSourceBadges(replyBubble, EasyChatCore.getMessageContextSources(s.messages[s.messages.length - 1]));
+      s.messages.push(EasyChatCore.createAssistantMessage({
+        content: msg.result,
+        display: reply,
+        meta: {
+          annotationCount: msg.annotations.length,
+          contextSources: EasyChatCore.getMessageContextSources(s.messages[s.messages.length - 1])
+        }
+      }));
+      save();
+    }
+    if (msg.type === 'ANNOTATE_ERROR' && msg.sessionId === annotateSessionId) {
+      chrome.runtime.onMessage.removeListener(onAnnotateMsg);
+      setToolLoading('btnAnnotate', false);
+      resetActiveStreamUi();
+      addBubble('ai', '标注失败: ' + msg.error);
+    }
+  };
+  chrome.runtime.onMessage.addListener(onAnnotateMsg);
+
+  bgMessage({
+    type: 'START_ANNOTATE_TASK',
+    sessionId: annotateSessionId,
+    prompt,
+    tabId: tab.id,
+    cfg: config
+  });
 }
 
 // ── Proxy request to chat page ──
@@ -1882,6 +2124,8 @@ function renderAssistantMessage(bubble, message) {
   appendSourceBadges(bubble, EasyChatCore.getMessageContextSources(message));
   appendSourcesFollowupButton(bubble, message);
   appendApplyButton(bubble, message);
+  appendOpenUrlSuggestions(bubble, message);
+  appendCopyButton(bubble, message);
 }
 
 function canApplyAssistantMessage(message) {
@@ -2416,6 +2660,31 @@ function appendApplyButton(bubble, message) {
   bubble.appendChild(wrap);
 }
 
+function appendOpenUrlSuggestions(bubble, message) {
+  if (message.display || message?.meta?.browserActionResult) return;
+  const text = EasyChatCore.extractPlainText(message.content);
+  // Remove URLs that are inside markdown links [text](url)
+  const bare = text.replace(/\[([^\]]*)\]\(https?:\/\/[^)]+\)/g, '');
+  const urls = [...new Set((bare.match(/https?:\/\/[^\s"'<>)\]，。）》]+/g) || []))].slice(0, 3);
+  if (!urls.length) return;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;';
+  urls.forEach(url => {
+    let hostname;
+    try { hostname = new URL(url).hostname; } catch { hostname = url.slice(0, 30); }
+    const btn = document.createElement('button');
+    btn.textContent = `↗ 打开 ${hostname}`;
+    btn.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:999px;border:1px solid rgba(16,163,127,0.35);background:rgba(16,163,127,0.12);color:#86efc7;font-size:11px;cursor:pointer;';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      chrome.tabs.create({ url });
+    });
+    wrap.appendChild(btn);
+  });
+  bubble.appendChild(wrap);
+}
+
 // Render a user bubble that has a display string (may contain icon+label prefix)
 // Format: "🌐 联网搜索  user text" or "💬 问 AI" (no extra text)
 // Icons that indicate a context tag: emoji followed by space and label
@@ -2730,8 +2999,10 @@ function formatPageActionableLine(item) {
 }
 
 function normalizeBrowserOpenUrl(rawUrl) {
-  const value = String(rawUrl || '').trim().replace(/^['"`“”‘’]+|['"`“”‘’]+$/g, '');
+  const value = String(rawUrl || '').trim().replace(/^[\u0027\u0060\u0022\u201c\u201d\u2018\u2019]+|[\u0027\u0060\u0022\u201c\u201d\u2018\u2019]+$/g, '');
   if (!value || /\s/.test(value)) return '';
+  // 纯中文且不含点号，不可能是域名（如”对哇”、”确认”等口语词）
+  if (/[\u4e00-\u9fff]/.test(value) && !value.includes('.')) return '';
 
   let candidate = value;
   if (/^\/\//.test(candidate)) candidate = `https:${candidate}`;
@@ -2749,9 +3020,183 @@ function normalizeBrowserOpenUrl(rawUrl) {
 function normalizeBrowserHistoryQuery(rawQuery) {
   return String(rawQuery || '')
     .trim()
-    .replace(/^['"`“”‘’]+|['"`“”‘’]+$/g, '')
+    .replace(/^[\u0027\u0060\u0022\u201c\u201d\u2018\u2019]+|[\u0027\u0060\u0022\u201c\u201d\u2018\u2019]+$/g, '')
     .replace(/\s+/g, ' ')
     .slice(0, 80);
+}
+
+function buildBrowserSearchUrl(query) {
+  const normalizedQuery = normalizeBrowserHistoryQuery(query);
+  return normalizedQuery ? `https://www.bing.com/search?q=${encodeURIComponent(normalizedQuery)}` : '';
+}
+
+function extractUrlHost(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw).hostname.replace(/^www\./i, '').toLowerCase();
+  } catch {}
+  const host = raw.match(/^([^/]+)/)?.[1] || '';
+  return host.replace(/^www\./i, '').toLowerCase();
+}
+
+function isBingSearchResultsPage(url) {
+  try {
+    const parsed = new URL(String(url || ''));
+    return /(^|\.)bing\.com$/i.test(parsed.hostname) && /^\/search\/?$/i.test(parsed.pathname || '/search');
+  } catch {
+    return false;
+  }
+}
+
+function extractExplicitNavigationUrl(text) {
+  const raw = String(text || '');
+  const direct = raw.match(/\bhttps?:\/\/[^\s"'`<>]+/i);
+  if (direct?.[0]) return normalizeBrowserOpenUrl(direct[0]);
+  const www = raw.match(/\bwww\.[^\s"'`<>]+/i);
+  if (www?.[0]) return normalizeBrowserOpenUrl(www[0]);
+  const domain = raw.match(/\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}(?:\/[^\s"'`<>]*)?/i);
+  if (domain?.[0]) return normalizeBrowserOpenUrl(domain[0]);
+  return '';
+}
+
+function extractBrowserOpenTarget(text) {
+  const raw = String(text || '').trim().replace(/[。！？!?]+$/g, '');
+  const patterns = [
+    /(?:帮我|请|麻烦你|麻烦)?(?:打开|点开|进入|访问|前往|去)\s+(.+)$/i,
+    /(?:open|go to|visit|navigate to)\s+(.+)$/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (!match?.[1]) continue;
+    const target = String(match[1])
+      .trim()
+      .replace(/^(?:这个|那个)?(?:网页|网站|站点)\s*/i, '')
+      .replace(/\s*(?:网页|网站|站点)$/i, '')
+      .replace(/[。！？!?]+$/g, '')
+      .trim();
+    if (target) return target;
+  }
+
+  return '';
+}
+
+function shouldPreferRecentHistoryNavigation(text) {
+  return /(最近(?:打开|访问|用过)?(?:的)?|recent(?:ly)?|just (?:opened|visited|used))/i.test(String(text || ''));
+}
+
+function normalizeRequestedSiteToken(value) {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/^www\./i, '')
+    .replace(/[/?#].*$/g, '')
+    .replace(/\.[a-z]{2,24}$/i, '')
+    .replace(/[^\p{L}\p{N}-]+/gu, '');
+}
+
+function isLikelyAlreadyOnRequestedSite(snapshot, target) {
+  if (isBingSearchResultsPage(snapshot?.url)) return false;
+  const token = normalizeRequestedSiteToken(target);
+  if (!token) return false;
+  const host = extractUrlHost(snapshot?.url);
+  if (host && host.includes(token)) return true;
+  return String(snapshot?.title || '').toLowerCase().includes(token);
+}
+
+function findExternalSearchResultTarget(snapshot) {
+  const currentHost = extractUrlHost(snapshot?.url);
+  const elements = Array.isArray(snapshot?.elements) ? snapshot.elements : [];
+  return elements.find((item) => {
+    if (item?.kind !== 'link' || !item.actions?.includes('click')) return false;
+    const host = extractUrlHost(item.href);
+    if (!host || host === currentHost) return false;
+    if (/(^|\.)bing\.com$/i.test(host) || /(^|\.)microsoft\.com$/i.test(host)) return false;
+    return true;
+  }) || null;
+}
+
+function inferBrowserAutomationPlanFallback(instruction, snapshot, options = {}) {
+  const allowNavigation = options.allowNavigation !== false;
+  const language = config.language || 'zh';
+  const text = String(instruction || '').trim();
+  if (!text) return { actions: [], message: '' };
+
+  const explicitUrl = allowNavigation ? extractExplicitNavigationUrl(text) : '';
+  if (explicitUrl) {
+    if (isLikelyAlreadyOnRequestedSite(snapshot, explicitUrl)) {
+      return {
+        actions: [],
+        message: language === 'en' ? 'The requested page is already open.' : '目标页面已经打开。'
+      };
+    }
+    return { actions: [{ action: 'open', url: explicitUrl }], message: '' };
+  }
+
+  const openTarget = allowNavigation ? extractBrowserOpenTarget(text) : '';
+  if (openTarget) {
+    if (isLikelyAlreadyOnRequestedSite(snapshot, openTarget)) {
+      return {
+        actions: [],
+        message: language === 'en' ? 'The requested page is already open.' : '目标页面已经打开。'
+      };
+    }
+
+    if (isBingSearchResultsPage(snapshot?.url)) {
+      const searchTarget = findExternalSearchResultTarget(snapshot);
+      if (searchTarget?.id) {
+        return { actions: [{ action: 'click', targetId: searchTarget.id }], message: '' };
+      }
+      return {
+        actions: [],
+        message: language === 'en'
+          ? `Opened search results for ${openTarget}.`
+          : `已打开“${openTarget}”的搜索结果。`
+      };
+    }
+
+    const normalizedUrl = normalizeBrowserOpenUrl(openTarget);
+    if (normalizedUrl) {
+      return { actions: [{ action: 'open', url: normalizedUrl }], message: '' };
+    }
+
+    const historyQuery = normalizeBrowserHistoryQuery(openTarget);
+    if (historyQuery && shouldPreferRecentHistoryNavigation(text)) {
+      return { actions: [{ action: 'open_recent', query: historyQuery }], message: '' };
+    }
+
+    const searchUrl = buildBrowserSearchUrl(historyQuery || openTarget);
+    if (searchUrl) {
+      return { actions: [{ action: 'open', url: searchUrl }], message: '' };
+    }
+  }
+
+  if (!snapshot?.inspectError) {
+    if (/(scroll up|向上滚动|上滑|上翻|回到顶部|滚到顶部)/i.test(text)) {
+      return {
+        actions: [{
+          action: 'scroll',
+          direction: 'up',
+          amount: /(顶部|top)/i.test(text) ? 'large' : 'medium'
+        }],
+        message: ''
+      };
+    }
+    if (/(scroll down|向下滚动|下滑|下翻|往下翻|往下滚|滚到底部)/i.test(text)) {
+      return {
+        actions: [{
+          action: 'scroll',
+          direction: 'down',
+          amount: /(底部|bottom|最下面)/i.test(text) ? 'large' : 'medium'
+        }],
+        message: ''
+      };
+    }
+  }
+
+  return { actions: [], message: '' };
 }
 
 function getBrowserActionStepSignature(step) {
@@ -3069,8 +3514,17 @@ function appendBrowserAutomationInsight(text, insight) {
 
 async function planBrowserAutomationForSnapshot(instruction, snapshot, options = {}) {
   const prompt = buildBrowserAutomationPrompt(instruction, snapshot, options);
-  const rawPlan = await callOnce(prompt);
-  return sanitizeBrowserActionPlan(rawPlan, snapshot, options);
+  try {
+    const rawPlan = await callOnce(prompt);
+    const plan = sanitizeBrowserActionPlan(rawPlan, snapshot, options);
+    if (plan.actions.length || plan.message) return plan;
+  } catch (err) {
+    const fallbackPlan = inferBrowserAutomationPlanFallback(instruction, snapshot, options);
+    if (fallbackPlan.actions.length || fallbackPlan.message) return fallbackPlan;
+    throw err;
+  }
+
+  return inferBrowserAutomationPlanFallback(instruction, snapshot, options);
 }
 
 async function summarizeBrowserAutomationPage(tab, instruction) {

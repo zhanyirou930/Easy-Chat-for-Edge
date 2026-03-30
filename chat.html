@@ -455,6 +455,7 @@
       <button class="top-btn" id="webSearchBtn" title="Web Search (Off)" style="opacity: 0.4;">🌐</button>
       <button class="top-btn" id="openSidebarBtn">Sidebar ▕</button>
       <button class="top-btn" id="exportBtn">Export</button>
+      <button class="top-btn" id="refreshBtn" title="Refresh">↻</button>
       <button class="top-btn danger" id="clearBtn">Clear</button>
     </div>
     <div class="model-selector">
@@ -627,6 +628,8 @@
           <option value="bing">Bing Search API</option>
           <option value="brave">Brave Search</option>
           <option value="custom">Custom API</option>
+          <option value="custom2">自定义 2</option>
+          <option value="custom3">自定义 3</option>
         </select>
         <span class="hint">Select search engine for web search</span>
       </div>
@@ -638,6 +641,16 @@
       <div class="field" id="customSearchUrlField" style="display:none;">
         <label>Custom Search API URL</label>
         <input type="text" id="customSearchUrlInput" placeholder="https://your-api.com/search?q={query}" />
+        <span class="hint">Use {query} as search keyword placeholder</span>
+      </div>
+      <div class="field" id="customSearchUrlField2" style="display:none;">
+        <label>自定义 2 API URL</label>
+        <input type="text" id="customSearchUrlInput2" placeholder="https://your-api.com/search?q={query}" />
+        <span class="hint">Use {query} as search keyword placeholder</span>
+      </div>
+      <div class="field" id="customSearchUrlField3" style="display:none;">
+        <label>自定义 3 API URL</label>
+        <input type="text" id="customSearchUrlInput3" placeholder="https://your-api.com/search?q={query}" />
         <span class="hint">Use {query} as search keyword placeholder</span>
       </div>
     </div>
@@ -671,6 +684,33 @@
       </div>
       <input type="file" id="userAvatarFile" accept="image/*" style="display:none" />
       <input type="file" id="aiAvatarFile" accept="image/*" style="display:none" />
+      <div class="field" style="margin-top:8px;">
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="selMenuToggle" checked style="width:auto;cursor:pointer;" />
+          <span>选中菜单</span>
+        </label>
+        <span class="hint">选中文字时显示快捷操作栏</span>
+      </div>
+      <div class="field" id="selMenuButtons" style="padding-left:24px;display:flex;flex-direction:column;gap:6px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;">
+          <input type="checkbox" id="selMenuAsk" checked style="width:auto;cursor:pointer;" /> 问 AI
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;">
+          <input type="checkbox" id="selMenuRewrite" checked style="width:auto;cursor:pointer;" /> 改写
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;">
+          <input type="checkbox" id="selMenuTranslate" checked style="width:auto;cursor:pointer;" /> 翻译
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;">
+          <input type="checkbox" id="selMenuSummarize" checked style="width:auto;cursor:pointer;" /> 总结
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;">
+          <input type="checkbox" id="selMenuAnnotate" checked style="width:auto;cursor:pointer;" /> 标注
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;">
+          <input type="checkbox" id="selMenuCopy" checked style="width:auto;cursor:pointer;" /> 复制
+        </label>
+      </div>
     </div>
 
     <!-- Profiles Tab -->

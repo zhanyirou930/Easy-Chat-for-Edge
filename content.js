@@ -8,12 +8,58 @@
   let annotationBubbles = [];
   let annotationsVisible = false;
 
+  // ── Selection menu config ──
+  let selMenuConfig = {
+    selMenuEnabled: true,
+    selMenuAsk: true,
+    selMenuRewrite: true,
+    selMenuTranslate: true,
+    selMenuSummarize: true,
+    selMenuAnnotate: true,
+    selMenuCopy: true
+  };
+  const selMenuKeyMap = {
+    ask: 'selMenuAsk',
+    rewrite: 'selMenuRewrite',
+    translate: 'selMenuTranslate',
+    summarize_selection: 'selMenuSummarize',
+    annotate: 'selMenuAnnotate',
+    copy: 'selMenuCopy'
+  };
+  chrome.storage.local.get(['config'], (data) => {
+    if (data.config) {
+      Object.keys(selMenuConfig).forEach(k => {
+        if (data.config[k] !== undefined) selMenuConfig[k] = data.config[k];
+      });
+    }
+  });
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.config?.newValue) {
+      const c = changes.config.newValue;
+      let changed = false;
+      Object.keys(selMenuConfig).forEach(k => {
+        if (c[k] !== undefined && c[k] !== selMenuConfig[k]) {
+          selMenuConfig[k] = c[k];
+          changed = true;
+        }
+      });
+      if (changed) rebuildSelectionAskBar();
+    }
+  });
+  function rebuildSelectionAskBar() {
+    if (selectionAskBar) {
+      selectionAskBar.remove();
+      selectionAskBar = null;
+    }
+  }
+
   // ── Region select state ──
   let selectOverlay = null;
   let selectCallback = null;
   let lastSelectionRange = null;
   let lastFocusedEditable = null;
   let selectionAskBar = null;
+  let selectionAskBarOffset = { dx: 0, dy: 0 };
   let selectionAskTooltip = null;
   let selectionAskRaf = 0;
   let selectionAskShowTimer = 0;
@@ -38,7 +84,9 @@
     { action: 'ask', label: '问 AI' },
     { action: 'rewrite', label: '改写' },
     { action: 'translate', label: '翻译' },
-    { action: 'summarize_selection', label: '总结' }
+    { action: 'summarize_selection', label: '总结' },
+    { action: 'annotate', label: '标注' },
+    { action: 'copy', label: '复制' }
   ];
 
   document.addEventListener('selectionchange', () => {
@@ -347,6 +395,19 @@
       return svg;
     }
 
+    if (action === 'annotate') {
+      add('path', { ...stroke, d: 'M3.5 14.5V4a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 14.5 4v7a1.5 1.5 0 0 1-1.5 1.5H7l-3.5 2Z' });
+      add('line', { ...stroke, x1: '7', y1: '6.5', x2: '11', y2: '6.5' });
+      add('line', { ...stroke, x1: '7', y1: '9.5', x2: '10', y2: '9.5' });
+      return svg;
+    }
+
+    if (action === 'copy') {
+      add('rect', { ...stroke, x: '6.5', y: '6.5', width: '8', height: '9', rx: '1.5' });
+      add('path', { ...stroke, d: 'M11.5 6.5V4a1.5 1.5 0 0 0-1.5-1.5H5A1.5 1.5 0 0 0 3.5 4v7A1.5 1.5 0 0 0 5 12.5h1.5' });
+      return svg;
+    }
+
     add('path', { ...stroke, d: 'M4.5 5.2h9' });
     add('path', { ...stroke, d: 'M4.5 9h9' });
     add('path', { ...stroke, d: 'M4.5 12.8h6.2' });
@@ -375,7 +436,28 @@
       overflow: 'hidden',
       isolation: 'isolate'
     });
-    selectionAskBar.addEventListener('mousedown', (e) => e.preventDefault());
+
+    // ── Drag to reposition ──
+    let barDragState = null;
+    selectionAskBar.addEventListener('mousedown', (e) => {
+      // only drag from bar background, not from buttons
+      if (e.target.closest('button')) { e.preventDefault(); return; }
+      e.preventDefault();
+      barDragState = { startX: e.clientX, startY: e.clientY, moved: false };
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!barDragState) return;
+      const mx = e.clientX - barDragState.startX;
+      const my = e.clientY - barDragState.startY;
+      if (!barDragState.moved && Math.abs(mx) + Math.abs(my) < 4) return;
+      barDragState.moved = true;
+      selectionAskBarOffset.dx += e.clientX - barDragState.startX;
+      selectionAskBarOffset.dy += e.clientY - barDragState.startY;
+      barDragState.startX = e.clientX;
+      barDragState.startY = e.clientY;
+      selectionAskBar.style.transform = `translate(${selectionAskBarOffset.dx}px, ${selectionAskBarOffset.dy}px)`;
+    });
+    document.addEventListener('mouseup', () => { barDragState = null; });
 
     const sheen = document.createElement('div');
     Object.assign(sheen.style, {
@@ -389,7 +471,13 @@
     });
     selectionAskBar.appendChild(sheen);
 
-    SELECTION_ACTIONS.forEach((item, idx) => {
+    const visibleActions = SELECTION_ACTIONS.filter(item => {
+      const key = selMenuKeyMap[item.action];
+      return !key || selMenuConfig[key] !== false;
+    });
+    if (!visibleActions.length) return selectionAskBar;
+
+    visibleActions.forEach((item, idx) => {
       if (idx > 0) {
         const separator = document.createElement('div');
         Object.assign(separator.style, {
@@ -664,6 +752,22 @@
     selectionAskBar.style.opacity = '0.72';
     selectionAskBar.style.pointerEvents = 'none';
 
+    if (action === 'copy') {
+      navigator.clipboard.writeText(text).catch(() => {});
+      selectionAskBar.style.opacity = '1';
+      selectionAskBar.style.pointerEvents = '';
+      hideSelectionAskBar();
+      return;
+    }
+
+    if (action === 'annotate') {
+      selectionAskBar.style.opacity = '1';
+      selectionAskBar.style.pointerEvents = '';
+      hideSelectionAskBar();
+      manualAnnotate();
+      return;
+    }
+
     if (useInlineTranslate && translateAnchor) {
       showInlineTranslateBubble(translateAnchor, '翻译中...', '正在生成译文...');
       const resp = await new Promise(resolve => {
@@ -721,6 +825,10 @@
   }
 
   function updateSelectionAskBar() {
+    if (!selMenuConfig.selMenuEnabled) {
+      hideSelectionAskBar();
+      return;
+    }
     const text = getCurrentSelectedText();
     const rect = getCurrentSelectionRect();
     if (!text || !rect) {
@@ -730,6 +838,9 @@
     selectionAskText = text;
     const bar = ensureSelectionAskBar();
     bar.style.display = 'flex';
+    selectionAskBarOffset.dx = 0;
+    selectionAskBarOffset.dy = 0;
+    bar.style.transform = '';
 
     const barRect = bar.getBoundingClientRect();
     const left = Math.max(8, Math.min(rect.left + rect.width / 2 - barRect.width / 2, window.innerWidth - barRect.width - 8));
@@ -1672,6 +1783,139 @@
 
   function stopRaf() {
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+  }
+
+  function manualAnnotate() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0).cloneRange();
+    sel.removeAllRanges();
+
+    try {
+      const highlight = document.createElement('mark');
+      highlight.className = '__easychat_highlight';
+      Object.assign(highlight.style, {
+        background: 'rgba(16,163,127,0.25)', borderRadius: '2px',
+        outline: '1px solid rgba(16,163,127,0.5)'
+      });
+      range.surroundContents(highlight);
+
+      const bubble = document.createElement('div');
+      bubble.className = '__easychat_bubble';
+      Object.assign(bubble.style, {
+        position: 'fixed', zIndex: '2147483640',
+        background: '#1e1e1e', color: '#ececec',
+        border: '1px solid #10a37f', borderRadius: '8px',
+        padding: '8px 12px', fontSize: '12px', lineHeight: '1.5',
+        maxWidth: '260px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+        cursor: 'move', userSelect: 'none'
+      });
+
+      const label = document.createElement('div');
+      label.style.cssText = 'font-weight:600;color:#10a37f;margin-bottom:4px;font-size:11px;';
+      label.textContent = '📌 手动标注';
+
+      const input = document.createElement('input');
+      Object.assign(input.style, {
+        width: '100%', background: '#2a2a2a', color: '#ececec',
+        border: '1px solid #444', borderRadius: '4px',
+        padding: '4px 6px', fontSize: '12px', outline: 'none',
+        boxSizing: 'border-box'
+      });
+      input.placeholder = '输入注释后回车确认...';
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const text = input.value.trim();
+          if (!text) return;
+          const span = document.createElement('div');
+          span.textContent = text;
+          span.style.cssText = 'font-size:12px;line-height:1.5;cursor:text;';
+          span.addEventListener('dblclick', (ev) => {
+            ev.stopPropagation();
+            const editInput = document.createElement('input');
+            Object.assign(editInput.style, {
+              width: '100%', background: '#2a2a2a', color: '#ececec',
+              border: '1px solid #444', borderRadius: '4px',
+              padding: '4px 6px', fontSize: '12px', outline: 'none',
+              boxSizing: 'border-box'
+            });
+            editInput.value = span.textContent;
+            editInput.addEventListener('mousedown', (me) => me.stopPropagation());
+            editInput.addEventListener('keydown', (ke) => {
+              if (ke.key === 'Enter') {
+                ke.preventDefault();
+                const newText = editInput.value.trim();
+                if (!newText) return;
+                span.textContent = newText;
+                editInput.replaceWith(span);
+              } else if (ke.key === 'Escape') {
+                editInput.replaceWith(span);
+              }
+            });
+            editInput.addEventListener('blur', () => {
+              if (editInput.parentNode) editInput.replaceWith(span);
+            });
+            span.replaceWith(editInput);
+            editInput.focus();
+            editInput.select();
+          });
+          input.replaceWith(span);
+        }
+      });
+      // prevent drag when interacting with input
+      input.addEventListener('mousedown', (e) => e.stopPropagation());
+
+      const closeBtn = document.createElement('button');
+      Object.assign(closeBtn.style, {
+        position: 'absolute', top: '4px', right: '6px',
+        background: 'none', border: 'none', color: '#666',
+        cursor: 'pointer', fontSize: '14px', lineHeight: '1', padding: '0'
+      });
+      closeBtn.textContent = '×';
+      closeBtn.addEventListener('click', () => {
+        bubble.remove();
+        if (highlight.parentNode) {
+          const parent = highlight.parentNode;
+          while (highlight.firstChild) parent.insertBefore(highlight.firstChild, highlight);
+          highlight.remove();
+        }
+        annotationBubbles = annotationBubbles.filter(a => a.bubble !== bubble);
+        if (!annotationBubbles.length) stopRaf();
+      });
+
+      bubble.appendChild(label);
+      bubble.appendChild(input);
+      bubble.appendChild(closeBtn);
+      document.body.appendChild(bubble);
+
+      // focus input after append
+      setTimeout(() => input.focus(), 0);
+
+      let dx = 0, dy = highlight.getBoundingClientRect().height + 6;
+      let lastX = 0, lastY = 0, dragging = false;
+      bubble.addEventListener('mousedown', (e) => {
+        if (e.target === closeBtn || e.target === input) return;
+        dragging = true;
+        lastX = e.clientX; lastY = e.clientY;
+        e.preventDefault();
+      });
+      const onMove = (e) => {
+        if (!dragging) return;
+        dx += e.clientX - lastX;
+        dy += e.clientY - lastY;
+        lastX = e.clientX; lastY = e.clientY;
+      };
+      const onUp = () => { dragging = false; };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+
+      annotationBubbles.push({ bubble, highlight, getOffset: () => ({ dx, dy }), onMove, onUp });
+      annotationsVisible = true;
+      startRaf();
+    } catch (e) {
+      // surroundContents can fail on cross-node ranges
+    }
   }
 
   function setAnnotations(annotations) {

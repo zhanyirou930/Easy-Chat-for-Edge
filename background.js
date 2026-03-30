@@ -768,7 +768,7 @@ function buildDirectToolRoutePrompt(question, tab) {
     '只返回 JSON，不要 markdown，不要解释。',
     '可选 mode 只有四种：chat、browser_action、recent_history_answer、recent_history_compare。',
     '如果只是普通聊天、解释、总结、翻译，返回 {"mode":"chat"}。',
-    '如果需要打开网页、点击、输入、滚动、查看当前页面、打开最近访问的网站，返回 {"mode":"browser_action","instruction":"..."}。',
+    '如果需要打开网页、点击、输入、滚动、查看当前页面、打开最近访问的网站，返回 {"mode":"browser_action","instruction":"..."}。instruction 必须是明确的操作目标（如网站名、URL、按钮名），不能是"对哇""好的""确认""就是它"等口语确认词。',
     '如果是在问最近看过/浏览过/访问过的内容，但不需要操作页面，只需要根据最近浏览记录回答，返回 {"mode":"recent_history_answer","query":"关键词"}。',
     '如果是在问最近看过的几个东西有什么区别、哪个好、怎么选，返回 {"mode":"recent_history_compare","query":"关键词"}。',
     'query 要尽量短，只保留核心检索词，例如“牙刷”“penguin api”“路由器”。',
@@ -1170,8 +1170,10 @@ function formatPageActionableLine(item) {
 }
 
 function normalizeBrowserOpenUrl(rawUrl) {
-  const value = String(rawUrl || '').trim().replace(/^['"`“”‘’]+|['"`“”‘’]+$/g, '');
+  const value = String(rawUrl || '').trim().replace(/^[\u0027\u0060\u0022\u201c\u201d\u2018\u2019]+|[\u0027\u0060\u0022\u201c\u201d\u2018\u2019]+$/g, '');
   if (!value || /\s/.test(value)) return '';
+  // 纯中文且不含点号，不可能是域名（如”对哇”、”确认”等口语词）
+  if (/[\u4e00-\u9fff]/.test(value) && !value.includes('.')) return '';
 
   let candidate = value;
   if (/^\/\//.test(candidate)) candidate = `https:${candidate}`;
@@ -1189,9 +1191,183 @@ function normalizeBrowserOpenUrl(rawUrl) {
 function normalizeBrowserHistoryQuery(rawQuery) {
   return String(rawQuery || '')
     .trim()
-    .replace(/^['"`“”‘’]+|['"`“”‘’]+$/g, '')
+    .replace(/^[\u0027\u0060\u0022\u201c\u201d\u2018\u2019]+|[\u0027\u0060\u0022\u201c\u201d\u2018\u2019]+$/g, '')
     .replace(/\s+/g, ' ')
     .slice(0, 80);
+}
+
+function buildBrowserSearchUrl(query) {
+  const normalizedQuery = normalizeBrowserHistoryQuery(query);
+  return normalizedQuery ? `https://www.bing.com/search?q=${encodeURIComponent(normalizedQuery)}` : '';
+}
+
+function extractUrlHost(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw).hostname.replace(/^www\./i, '').toLowerCase();
+  } catch {}
+  const host = raw.match(/^([^/]+)/)?.[1] || '';
+  return host.replace(/^www\./i, '').toLowerCase();
+}
+
+function isBingSearchResultsPage(url) {
+  try {
+    const parsed = new URL(String(url || ''));
+    return /(^|\.)bing\.com$/i.test(parsed.hostname) && /^\/search\/?$/i.test(parsed.pathname || '/search');
+  } catch {
+    return false;
+  }
+}
+
+function extractExplicitNavigationUrl(text) {
+  const raw = String(text || '');
+  const direct = raw.match(/\bhttps?:\/\/[^\s"'`<>]+/i);
+  if (direct?.[0]) return normalizeBrowserOpenUrl(direct[0]);
+  const www = raw.match(/\bwww\.[^\s"'`<>]+/i);
+  if (www?.[0]) return normalizeBrowserOpenUrl(www[0]);
+  const domain = raw.match(/\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}(?:\/[^\s"'`<>]*)?/i);
+  if (domain?.[0]) return normalizeBrowserOpenUrl(domain[0]);
+  return '';
+}
+
+function extractBrowserOpenTarget(text) {
+  const raw = String(text || '').trim().replace(/[。！？!?]+$/g, '');
+  const patterns = [
+    /(?:帮我|请|麻烦你|麻烦)?(?:打开|点开|进入|访问|前往|去)\s+(.+)$/i,
+    /(?:open|go to|visit|navigate to)\s+(.+)$/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (!match?.[1]) continue;
+    const target = String(match[1])
+      .trim()
+      .replace(/^(?:这个|那个)?(?:网页|网站|站点)\s*/i, '')
+      .replace(/\s*(?:网页|网站|站点)$/i, '')
+      .replace(/[。！？!?]+$/g, '')
+      .trim();
+    if (target) return target;
+  }
+
+  return '';
+}
+
+function shouldPreferRecentHistoryNavigation(text) {
+  return /(最近(?:打开|访问|用过)?(?:的)?|recent(?:ly)?|just (?:opened|visited|used))/i.test(String(text || ''));
+}
+
+function normalizeRequestedSiteToken(value) {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/^www\./i, '')
+    .replace(/[/?#].*$/g, '')
+    .replace(/\.[a-z]{2,24}$/i, '')
+    .replace(/[^\p{L}\p{N}-]+/gu, '');
+}
+
+function isLikelyAlreadyOnRequestedSite(snapshot, target) {
+  if (isBingSearchResultsPage(snapshot?.url)) return false;
+  const token = normalizeRequestedSiteToken(target);
+  if (!token) return false;
+  const host = extractUrlHost(snapshot?.url);
+  if (host && host.includes(token)) return true;
+  return String(snapshot?.title || '').toLowerCase().includes(token);
+}
+
+function findExternalSearchResultTarget(snapshot) {
+  const currentHost = extractUrlHost(snapshot?.url);
+  const elements = Array.isArray(snapshot?.elements) ? snapshot.elements : [];
+  return elements.find((item) => {
+    if (item?.kind !== 'link' || !item.actions?.includes('click')) return false;
+    const host = extractUrlHost(item.href);
+    if (!host || host === currentHost) return false;
+    if (/(^|\.)bing\.com$/i.test(host) || /(^|\.)microsoft\.com$/i.test(host)) return false;
+    return true;
+  }) || null;
+}
+
+function inferBrowserAutomationPlanFallback(instruction, snapshot, config, options = {}) {
+  const allowNavigation = options.allowNavigation !== false;
+  const language = config?.language || 'zh';
+  const text = String(instruction || '').trim();
+  if (!text) return { actions: [], message: '' };
+
+  const explicitUrl = allowNavigation ? extractExplicitNavigationUrl(text) : '';
+  if (explicitUrl) {
+    if (isLikelyAlreadyOnRequestedSite(snapshot, explicitUrl)) {
+      return {
+        actions: [],
+        message: isEnglishLanguage(language) ? 'The requested page is already open.' : '目标页面已经打开。'
+      };
+    }
+    return { actions: [{ action: 'open', url: explicitUrl }], message: '' };
+  }
+
+  const openTarget = allowNavigation ? extractBrowserOpenTarget(text) : '';
+  if (openTarget) {
+    if (isLikelyAlreadyOnRequestedSite(snapshot, openTarget)) {
+      return {
+        actions: [],
+        message: isEnglishLanguage(language) ? 'The requested page is already open.' : '目标页面已经打开。'
+      };
+    }
+
+    if (isBingSearchResultsPage(snapshot?.url)) {
+      const searchTarget = findExternalSearchResultTarget(snapshot);
+      if (searchTarget?.id) {
+        return { actions: [{ action: 'click', targetId: searchTarget.id }], message: '' };
+      }
+      return {
+        actions: [],
+        message: isEnglishLanguage(language)
+          ? `Opened search results for ${openTarget}.`
+          : `已打开“${openTarget}”的搜索结果。`
+      };
+    }
+
+    const normalizedUrl = normalizeBrowserOpenUrl(openTarget);
+    if (normalizedUrl) {
+      return { actions: [{ action: 'open', url: normalizedUrl }], message: '' };
+    }
+
+    const historyQuery = normalizeBrowserHistoryQuery(openTarget);
+    if (historyQuery && shouldPreferRecentHistoryNavigation(text)) {
+      return { actions: [{ action: 'open_recent', query: historyQuery }], message: '' };
+    }
+
+    const searchUrl = buildBrowserSearchUrl(historyQuery || openTarget);
+    if (searchUrl) {
+      return { actions: [{ action: 'open', url: searchUrl }], message: '' };
+    }
+  }
+
+  if (!snapshot?.inspectError) {
+    if (/(scroll up|向上滚动|上滑|上翻|回到顶部|滚到顶部)/i.test(text)) {
+      return {
+        actions: [{
+          action: 'scroll',
+          direction: 'up',
+          amount: /(顶部|top)/i.test(text) ? 'large' : 'medium'
+        }],
+        message: ''
+      };
+    }
+    if (/(scroll down|向下滚动|下滑|下翻|往下翻|往下滚|滚到底部)/i.test(text)) {
+      return {
+        actions: [{
+          action: 'scroll',
+          direction: 'down',
+          amount: /(底部|bottom|最下面)/i.test(text) ? 'large' : 'medium'
+        }],
+        message: ''
+      };
+    }
+  }
+
+  return { actions: [], message: '' };
 }
 
 function getBrowserActionStepSignature(step) {
@@ -1491,12 +1667,21 @@ function appendBrowserAutomationInsight(text, insight, language = 'zh') {
 
 async function planBrowserAutomationForSnapshot(instruction, snapshot, config, options = {}) {
   const prompt = buildBrowserAutomationPrompt(instruction, snapshot, options);
-  const rawPlan = await callOnceWithConfig(config, prompt, {
-    signal: options.signal,
-    temperature: 0.2,
-    maxTokens: 900
-  });
-  return sanitizeBrowserActionPlan(rawPlan, snapshot, options);
+  try {
+    const rawPlan = await callOnceWithConfig(config, prompt, {
+      signal: options.signal,
+      temperature: 0.2,
+      maxTokens: 900
+    });
+    const plan = sanitizeBrowserActionPlan(rawPlan, snapshot, options);
+    if (plan.actions.length || plan.message) return plan;
+  } catch (err) {
+    const fallbackPlan = inferBrowserAutomationPlanFallback(instruction, snapshot, config, options);
+    if (fallbackPlan.actions.length || fallbackPlan.message) return fallbackPlan;
+    throw err;
+  }
+
+  return inferBrowserAutomationPlanFallback(instruction, snapshot, config, options);
 }
 
 async function summarizeBrowserAutomationPage(tab, instruction, config, language = 'zh', signal) {
@@ -1980,6 +2165,60 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return false;
     }
     state.controller.abort();
+    sendResponse({ ok: true });
+    return false;
+  }
+});
+
+// ── Annotate task (background) ──
+const activeAnnotateTasks = new Map();
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'START_ANNOTATE_TASK') {
+    const { sessionId, prompt, tabId, cfg } = msg;
+    if (!sessionId || !prompt || !cfg?.apiKey) {
+      sendResponse({ ok: false, error: 'missing_params' });
+      return false;
+    }
+    const controller = new AbortController();
+    activeAnnotateTasks.set(sessionId, controller);
+    callOnceWithConfig(cfg, prompt, { signal: controller.signal, temperature: 0.3 })
+      .then(result => {
+        activeAnnotateTasks.delete(sessionId);
+        const jsonMatch = result.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) {
+          broadcastStreamEvent({ type: 'ANNOTATE_ERROR', sessionId, error: '无法解析标注结果' });
+          return;
+        }
+        const annotations = JSON.parse(jsonMatch[0]);
+        if (tabId) {
+          chrome.tabs.sendMessage(tabId, { type: 'SET_ANNOTATIONS', annotations }).catch(() => {});
+        }
+        broadcastStreamEvent({ type: 'ANNOTATE_DONE', sessionId, annotations, result });
+      })
+      .catch(err => {
+        activeAnnotateTasks.delete(sessionId);
+        if (err?.name === 'AbortError') return;
+        broadcastStreamEvent({ type: 'ANNOTATE_ERROR', sessionId, error: err?.message || '标注失败' });
+      });
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (msg.type === 'GET_ACTIVE_ANNOTATE') {
+    const active = activeAnnotateTasks.has(String(msg.sessionId || ''));
+    sendResponse({ ok: true, active });
+    return false;
+  }
+
+  if (msg.type === 'STOP_ANNOTATE_TASK') {
+    const controller = activeAnnotateTasks.get(String(msg.sessionId || ''));
+    if (!controller) {
+      sendResponse({ ok: false, error: 'annotate_task_not_found' });
+      return false;
+    }
+    controller.abort();
+    activeAnnotateTasks.delete(String(msg.sessionId || ''));
     sendResponse({ ok: true });
     return false;
   }

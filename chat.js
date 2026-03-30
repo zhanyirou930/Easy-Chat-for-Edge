@@ -15,6 +15,8 @@ let config = {
   searchEngine: 'tavily',
   searchApiKey: '',
   customSearchUrl: '',
+  customSearchUrl2: '',
+  customSearchUrl3: '',
   streamEnabled: true,
   userAvatar: '',
   aiAvatar: '',
@@ -685,6 +687,10 @@ const searchEngineSelect = document.getElementById('searchEngineSelect');
 const searchApiKeyInput = document.getElementById('searchApiKeyInput');
 const customSearchUrlInput = document.getElementById('customSearchUrlInput');
 const customSearchUrlField = document.getElementById('customSearchUrlField');
+const customSearchUrlInput2 = document.getElementById('customSearchUrlInput2');
+const customSearchUrlField2 = document.getElementById('customSearchUrlField2');
+const customSearchUrlInput3 = document.getElementById('customSearchUrlInput3');
+const customSearchUrlField3 = document.getElementById('customSearchUrlField3');
 const modelSelect = document.getElementById('modelSelect');
 const customModelWrap = document.getElementById('customModelWrap');
 const customModelInput = document.getElementById('customModelInput');
@@ -695,6 +701,22 @@ const searchInput = document.getElementById('searchInput');
 const streamToggle = document.getElementById('streamToggle');
 const userAvatarInput = document.getElementById('userAvatarInput');
 const aiAvatarInput = document.getElementById('aiAvatarInput');
+const selMenuToggle = document.getElementById('selMenuToggle');
+const selMenuButtons = document.getElementById('selMenuButtons');
+const selMenuAsk = document.getElementById('selMenuAsk');
+const selMenuRewrite = document.getElementById('selMenuRewrite');
+const selMenuTranslate = document.getElementById('selMenuTranslate');
+const selMenuSummarize = document.getElementById('selMenuSummarize');
+const selMenuAnnotate = document.getElementById('selMenuAnnotate');
+const selMenuCopy = document.getElementById('selMenuCopy');
+
+selMenuToggle.addEventListener('change', () => {
+  const disabled = !selMenuToggle.checked;
+  [selMenuAsk, selMenuRewrite, selMenuTranslate, selMenuSummarize, selMenuAnnotate, selMenuCopy].forEach(cb => {
+    cb.disabled = disabled;
+    cb.closest('label').style.opacity = disabled ? '0.4' : '1';
+  });
+});
 
 // Model selector elements
 const modelBtn = document.getElementById('modelBtn');
@@ -884,10 +906,24 @@ chrome.storage.local.get(['config', 'sessions', 'profiles', 'currentProfile', 't
   searchEngineSelect.value = config.searchEngine || 'tavily';
   searchApiKeyInput.value = config.searchApiKey || '';
   customSearchUrlInput.value = config.customSearchUrl || '';
+  customSearchUrlInput2.value = config.customSearchUrl2 || '';
+  customSearchUrlInput3.value = config.customSearchUrl3 || '';
   if (config.searchEngine === 'custom') {
     customSearchUrlField.style.display = 'block';
+  } else if (config.searchEngine === 'custom2') {
+    customSearchUrlField2.style.display = 'block';
+  } else if (config.searchEngine === 'custom3') {
+    customSearchUrlField3.style.display = 'block';
   }
   streamToggle.checked = config.streamEnabled ?? true;
+  selMenuToggle.checked = config.selMenuEnabled ?? true;
+  selMenuAsk.checked = config.selMenuAsk ?? true;
+  selMenuRewrite.checked = config.selMenuRewrite ?? true;
+  selMenuTranslate.checked = config.selMenuTranslate ?? true;
+  selMenuSummarize.checked = config.selMenuSummarize ?? true;
+  selMenuAnnotate.checked = config.selMenuAnnotate ?? true;
+  selMenuCopy.checked = config.selMenuCopy ?? true;
+  selMenuToggle.dispatchEvent(new Event('change'));
   userAvatarInput.value = config.userAvatar ? t('avatarUploaded') : '';
   aiAvatarInput.value = config.aiAvatar ? t('avatarUploaded') : '';
 
@@ -1133,11 +1169,10 @@ presPenaltyInput.addEventListener('input', () => { presPenaltyVal.textContent = 
 
 // ── Search engine selector ──
 searchEngineSelect.addEventListener('change', () => {
-  if (searchEngineSelect.value === 'custom') {
-    customSearchUrlField.style.display = 'block';
-  } else {
-    customSearchUrlField.style.display = 'none';
-  }
+  const v = searchEngineSelect.value;
+  customSearchUrlField.style.display = v === 'custom' ? 'block' : 'none';
+  customSearchUrlField2.style.display = v === 'custom2' ? 'block' : 'none';
+  customSearchUrlField3.style.display = v === 'custom3' ? 'block' : 'none';
 });
 
 // ── Toast ──
@@ -1328,7 +1363,16 @@ document.getElementById('saveBtn').addEventListener('click', () => {
   config.searchEngine = searchEngineSelect.value;
   config.searchApiKey = searchApiKeyInput.value.trim();
   config.customSearchUrl = customSearchUrlInput.value.trim();
+  config.customSearchUrl2 = customSearchUrlInput2.value.trim();
+  config.customSearchUrl3 = customSearchUrlInput3.value.trim();
   config.streamEnabled = streamToggle.checked;
+  config.selMenuEnabled = selMenuToggle.checked;
+  config.selMenuAsk = selMenuAsk.checked;
+  config.selMenuRewrite = selMenuRewrite.checked;
+  config.selMenuTranslate = selMenuTranslate.checked;
+  config.selMenuSummarize = selMenuSummarize.checked;
+  config.selMenuAnnotate = selMenuAnnotate.checked;
+  config.selMenuCopy = selMenuCopy.checked;
   config.model = getModel();
 
   // Save to current profile
@@ -1375,6 +1419,7 @@ function showTestResult(type, msg) {
 document.getElementById('openSidebarBtn').addEventListener('click', () => {
   openSidebar();
 });
+document.getElementById('refreshBtn').addEventListener('click', () => location.reload());
 document.getElementById('clearBtn').addEventListener('click', () => {
   if (!currentId) return;
   const s = current();
@@ -3252,10 +3297,24 @@ function loadProfile(name) {
   searchEngineSelect.value = config.searchEngine || 'tavily';
   searchApiKeyInput.value = config.searchApiKey || '';
   customSearchUrlInput.value = config.customSearchUrl || '';
+  customSearchUrlInput2.value = config.customSearchUrl2 || '';
+  customSearchUrlInput3.value = config.customSearchUrl3 || '';
   if (config.searchEngine === 'custom') {
     customSearchUrlField.style.display = 'block';
+  } else if (config.searchEngine === 'custom2') {
+    customSearchUrlField2.style.display = 'block';
+  } else if (config.searchEngine === 'custom3') {
+    customSearchUrlField3.style.display = 'block';
   }
   streamToggle.checked = config.streamEnabled ?? true;
+  selMenuToggle.checked = config.selMenuEnabled ?? true;
+  selMenuAsk.checked = config.selMenuAsk ?? true;
+  selMenuRewrite.checked = config.selMenuRewrite ?? true;
+  selMenuTranslate.checked = config.selMenuTranslate ?? true;
+  selMenuSummarize.checked = config.selMenuSummarize ?? true;
+  selMenuAnnotate.checked = config.selMenuAnnotate ?? true;
+  selMenuCopy.checked = config.selMenuCopy ?? true;
+  selMenuToggle.dispatchEvent(new Event('change'));
   userAvatarInput.value = config.userAvatar ? t('avatarUploaded') : '';
   aiAvatarInput.value = config.aiAvatar ? t('avatarUploaded') : '';
 
