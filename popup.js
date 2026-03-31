@@ -141,7 +141,6 @@ function requestStopCurrentStream() {
 
 function processPendingScreenshot(ps) {
   if (!ps) return;
-  chrome.storage.local.remove('pendingScreenshot');
   if (typeof ps === 'string') applyPendingScreenshot(ps);
   else if (ps.full && ps.rect) cropAndApply(ps.full, ps.rect);
 }
@@ -898,7 +897,7 @@ function createSourcesFollowupContext(sources) {
 function shouldUseRecentViewedCompare(text) {
   const value = String(text || '').trim();
   if (!value) return false;
-  const hasCompareCue = /(区别|差别|哪个好|怎么选|对比|不同|分别|比较|compare|difference|which one)/i.test(value);
+  const hasCompareCue = /(区别|差别|哪个好|哪个更好|更好|好一点|好些|怎么选|对比|不同|分别|比较|优劣|推荐哪|选哪|compare|difference|which one|which is better|better)/i.test(value);
   const hasRecentCue = /(刚刚|刚才|最近|刚看|刚才看|刚刚看|recently|just looked|just viewed)/i.test(value);
   const hasPluralCue = /(那几个|那几款|这几个|这些|那些|几支|几把|几个)/.test(value);
   return hasCompareCue && (hasRecentCue || hasPluralCue);
@@ -1227,12 +1226,18 @@ async function openSidebar() {
 
 // ── UI events ──
 document.getElementById('openSidebarBtn').addEventListener('click', async () => {
+  if (pendingScreenshot) {
+    await storageSet({ pendingScreenshot });
+  }
   await storageSet({ currentSidebarSessionId: currentId });
   openSidebar();
 });
 
 document.getElementById('openFullBtn').addEventListener('click', async () => {
   const L = LANG[config.language] || LANG.zh;
+  if (pendingScreenshot) {
+    await storageSet({ pendingScreenshot });
+  }
   await storageSet({ currentId, [sessionStorageKey]: currentId });
   const res = await bgMessage({ type: 'OPEN_CHAT_WINDOW', sourceWindowId: hostWindowId, sessionId: currentId });
   if (!res?.ok) {
@@ -1269,6 +1274,7 @@ stopBtn.addEventListener('click', () => { requestStopCurrentStream(); });
 document.getElementById('removeScreenshot').addEventListener('click', () => {
   pendingScreenshot = null;
   pendingScreenshotMeta = null;
+  chrome.storage.local.remove('pendingScreenshot');
   document.getElementById('screenshotPreviewWrap').style.display = 'none';
   quickInput.placeholder = getQuickComposerPlaceholder();
 });
@@ -1397,6 +1403,7 @@ async function sendQuick(prefillText, imageDataUrl) {
   quickInput.style.height = 'auto';
   pendingScreenshot = null;
   pendingScreenshotMeta = null;
+  chrome.storage.local.remove('pendingScreenshot');
   pendingContext = null;
   document.getElementById('screenshotPreviewWrap').style.display = 'none';
   renderContextTag();
@@ -2663,9 +2670,13 @@ function appendApplyButton(bubble, message) {
 function appendOpenUrlSuggestions(bubble, message) {
   if (message.display || message?.meta?.browserActionResult) return;
   const text = EasyChatCore.extractPlainText(message.content);
-  // Remove URLs that are inside markdown links [text](url)
+  // Collect URLs from markdown links [text](url)
+  const mdUrls = [];
+  text.replace(/\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, (_, _label, url) => { mdUrls.push(url); });
+  // Collect bare URLs (outside markdown links)
   const bare = text.replace(/\[([^\]]*)\]\(https?:\/\/[^)]+\)/g, '');
-  const urls = [...new Set((bare.match(/https?:\/\/[^\s"'<>)\]，。）》]+/g) || []))].slice(0, 3);
+  const bareUrls = bare.match(/https?:\/\/[^\s"'<>，。）》]+/g) || [];
+  const urls = [...new Set([...mdUrls, ...bareUrls])].slice(0, 3);
   if (!urls.length) return;
   const wrap = document.createElement('div');
   wrap.style.cssText = 'margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;';
@@ -2705,10 +2716,16 @@ function renderUserDisplay(bubble, display) {
   }
 }
 
+function protectUrls(text) {
+  return text.replace(/(^|[\s\n])(https?:\/\/[^\s<>]*)/g, (m, pre, url) =>
+    pre + '<' + url + '>'
+  );
+}
+
 function renderBubble(bubble, text) {
   if (typeof marked !== 'undefined') {
     bubble.className = 'msg-bubble md';
-    bubble.innerHTML = marked.parse(text);
+    bubble.innerHTML = marked.parse(protectUrls(text), { breaks: true, gfm: true });
     bubble.querySelectorAll('a').forEach(a => {
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
@@ -3258,6 +3275,7 @@ function buildBrowserAutomationPrompt(instruction, snapshot, options = {}) {
       '返回格式示例 2：{"actions":[{"action":"open","url":"https://openai.com"}],"message":"可选，简短说明"}'
     ] : []),
     `返回格式示例 ${allowNavigation ? 3 : 1}：{"actions":[{"action":"click","targetId":"e1"},{"action":"type","targetId":"e2","text":"OpenAI"}],"message":"可选，简短说明"}`,
+    ...(options.conversationContext ? [`对话上下文（帮助理解用户指代）：\n${options.conversationContext}`] : []),
     `用户指令：${instruction}`,
     `页面标题：${snapshot?.title || ''}`,
     `页面链接：${snapshot?.url || ''}`,
@@ -3608,6 +3626,16 @@ async function runBrowserAutomation(session, instruction, ctx) {
   const L = LANG[config.language] || LANG.zh;
   showTyping();
 
+  const recentMessages = (session?.messages || [])
+    .slice(-6)
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => {
+      const text = EasyChatCore.extractPlainText(m.content);
+      return `${m.role === 'user' ? '用户' : 'AI'}：${text.slice(0, 100)}`;
+    })
+    .join('\n')
+    .slice(0, 400);
+
   try {
     let activeTab = await getHostActiveTabInfo();
     const executionHistory = [];
@@ -3634,6 +3662,7 @@ async function runBrowserAutomation(session, instruction, ctx) {
       const plan = await planBrowserAutomationForSnapshot(instruction, snapshot, {
         allowNavigation: true,
         history: executionHistory,
+        conversationContext: recentMessages,
         turnIndex
       });
 

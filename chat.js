@@ -870,7 +870,7 @@ function updateCurrentModelDisplay() {
 }
 
 // ── Init ──
-chrome.storage.local.get(['config', 'sessions', 'profiles', 'currentProfile', 'tokenUsage', 'currentId', 'currentPopupSessionId'], (data) => {
+chrome.storage.local.get(['config', 'sessions', 'profiles', 'currentProfile', 'tokenUsage', 'currentId', 'currentPopupSessionId', 'pendingScreenshot'], (data) => {
   if (data.profiles) {
     profiles = data.profiles;
   } else {
@@ -966,6 +966,10 @@ chrome.storage.local.get(['config', 'sessions', 'profiles', 'currentProfile', 't
   // Render profiles on init
   renderProfiles();
   renderProfilesModal();
+
+  if (data.pendingScreenshot) {
+    processPendingScreenshot(data.pendingScreenshot);
+  }
 });
 
 // ── Web Search Toggle ──
@@ -1462,6 +1466,16 @@ function readImage(file) {
   };
   reader.readAsDataURL(file);
 }
+function processPendingScreenshot(ps) {
+  if (!ps) return;
+  const dataUrl = typeof ps === 'string' ? ps : (ps.full || null);
+  if (!dataUrl) return;
+  attachments.push({
+    type: 'image', name: 'screenshot.png',
+    dataUrl, base64: dataUrl.split(',')[1] || '', mimeType: 'image/png'
+  });
+  renderAttachments();
+}
 function readFile(file) {
   const reader = new FileReader();
   reader.onload = (e) => { attachments.push({ type: 'file', name: file.name, text: e.target.result }); renderAttachments(); };
@@ -1473,7 +1487,10 @@ function renderAttachments() {
     const item = document.createElement('div');
     const rm = document.createElement('button');
     rm.className = 'remove-attach'; rm.textContent = '✕';
-    rm.addEventListener('click', () => { attachments.splice(i, 1); renderAttachments(); });
+    rm.addEventListener('click', () => {
+      if (a.name === 'screenshot.png') chrome.storage.local.remove('pendingScreenshot');
+      attachments.splice(i, 1); renderAttachments();
+    });
     if (a.type === 'image') {
       item.className = 'attach-item';
       const img = document.createElement('img'); img.src = a.dataUrl;
@@ -1929,6 +1946,9 @@ async function restoreBackgroundStreamForCurrentSession() {
 // ── Cross-window sync ──
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
+  if (changes.pendingScreenshot?.newValue) {
+    processPendingScreenshot(changes.pendingScreenshot.newValue);
+  }
   if (changes.currentId?.newValue && changes.currentId.newValue !== currentId && !streaming && !proxyStreaming) {
     const nextId = changes.currentId.newValue;
     if (sessions.find(s => s.id === nextId)) {
@@ -2085,9 +2105,15 @@ function applyRenderedMarkdown(target, rendered) {
   bindMarkdownInteractions(target);
 }
 
+function protectUrls(text) {
+  return text.replace(/(^|[\s\n])(https?:\/\/[^\s<>\])]*)/g, (m, pre, url) =>
+    pre + '<' + url + '>'
+  );
+}
+
 function buildRenderedMarkdownHtml(text) {
   if (typeof marked === 'undefined') return null;
-  const html = marked.parse(text, { breaks: true, gfm: true });
+  const html = marked.parse(protectUrls(text), { breaks: true, gfm: true });
   const div = document.createElement('div');
   div.className = 'bubble md';
   div.innerHTML = html;
@@ -2842,6 +2868,7 @@ async function send() {
   draftSourceContext = null;
   renderDraftContextTag();
   attachments = []; renderAttachments();
+  chrome.storage.local.remove('pendingScreenshot');
   save(); renderHistory(); updateStats(); autoScroll = true;
 
   // Web search if enabled (do it after displaying user message)

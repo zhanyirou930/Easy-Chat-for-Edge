@@ -460,10 +460,19 @@
     } catch {}
 
     const raw = await res.text();
-    if (/^\s*data:/m.test(raw)) {
-      return buildSseCompletionFromText(raw);
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) {
+      throw new Error('empty_response_body');
     }
-    return JSON.parse(raw);
+    if (/^\s*data:/m.test(trimmed)) {
+      return buildSseCompletionFromText(trimmed);
+    }
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      const preview = trimmed.slice(0, 160).replace(/\s+/g, ' ');
+      throw new Error(preview ? `invalid_json_response: ${preview}` : 'invalid_json_response');
+    }
   }
 
   async function streamChatCompletion(options) {
@@ -512,7 +521,7 @@
       noTitle: opts.noTitleLabel || '无标题'
     };
 
-    if (!key && engine !== 'custom') {
+    if (!key && engine !== 'custom' && engine !== 'custom2' && engine !== 'custom3') {
       if (typeof opts.onMissingKey === 'function') opts.onMissingKey();
       return null;
     }
@@ -531,6 +540,10 @@
           return await searchBrave(query, key, labels);
         case 'custom':
           return await searchCustom(query, config?.customSearchUrl, key, labels);
+        case 'custom2':
+          return await searchCustom(query, config?.customSearchUrl2, key, labels);
+        case 'custom3':
+          return await searchCustom(query, config?.customSearchUrl3, key, labels);
         default:
           return null;
       }

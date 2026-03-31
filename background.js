@@ -713,7 +713,7 @@ function cleanRecentHistoryTopic(value) {
 function shouldUseRecentViewedCompare(text) {
   const value = String(text || '').trim();
   if (!value) return false;
-  const hasCompareCue = /(区别|差别|哪个好|怎么选|对比|不同|分别|比较|compare|difference|which one)/i.test(value);
+  const hasCompareCue = /(区别|差别|哪个好|哪个更好|更好|好一点|好些|怎么选|对比|不同|分别|比较|优劣|推荐哪|选哪|compare|difference|which one|which is better|better)/i.test(value);
   const hasRecentCue = /(刚刚|刚才|最近|刚看|刚才看|刚刚看|recently|just looked|just viewed)/i.test(value);
   const hasPluralCue = /(那几个|那几款|这几个|这些|那些|几支|几把|几个)/.test(value);
   return hasCompareCue && (hasRecentCue || hasPluralCue);
@@ -1429,6 +1429,7 @@ function buildBrowserAutomationPrompt(instruction, snapshot, options = {}) {
       '返回格式示例 2：{"actions":[{"action":"open","url":"https://openai.com"}],"message":"可选，简短说明"}'
     ] : []),
     `返回格式示例 ${allowNavigation ? 3 : 1}：{"actions":[{"action":"click","targetId":"e1"},{"action":"type","targetId":"e2","text":"OpenAI"}],"message":"可选，简短说明"}`,
+    ...(options.conversationContext ? [`对话上下文（帮助理解用户指代）：\n${options.conversationContext}`] : []),
     `用户指令：${instruction}`,
     `页面标题：${snapshot?.title || ''}`,
     `页面链接：${snapshot?.url || ''}`,
@@ -1774,6 +1775,19 @@ async function runBrowserAutomationTask(sessionId, instruction, ctx, config, pre
   let lastSnapshot = null;
   let turnsExecuted = 0;
 
+  const sessionData = await storageGet(['sessions']);
+  const allSessions = Array.isArray(sessionData.sessions) ? sessionData.sessions : [];
+  const currentSession = allSessions.find(s => s.id === sessionId);
+  const recentMessages = (currentSession?.messages || [])
+    .slice(-6)
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => {
+      const text = EasyChatCore.extractPlainText(m.content);
+      return `${m.role === 'user' ? '用户' : 'AI'}：${text.slice(0, 100)}`;
+    })
+    .join('\n')
+    .slice(0, 400);
+
   for (let turnIndex = 0; turnIndex < BROWSER_AGENT_MAX_TURNS; turnIndex += 1) {
     throwIfAborted(signal);
     const inspected = activeTab?.id ? await inspectPageActionables(activeTab) : { ok: false, error: 'host_tab_not_found' };
@@ -1798,6 +1812,7 @@ async function runBrowserAutomationTask(sessionId, instruction, ctx, config, pre
     const plan = await planBrowserAutomationForSnapshot(instruction, snapshot, config, {
       allowNavigation: true,
       history: executionHistory,
+      conversationContext: recentMessages,
       turnIndex,
       signal
     });

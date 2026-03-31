@@ -332,6 +332,93 @@
       font-size: 11px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 999; white-space: nowrap;
     }
     .toast.show { opacity: 1; }
+    .thinking-shell {
+      position: relative;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(18,29,27,.98), rgba(13,21,20,.94));
+      border: 1px solid rgba(16,163,127,.18);
+      padding: 10px 14px 10px 16px;
+      overflow: hidden;
+      box-shadow: 0 10px 18px rgba(0,0,0,.16);
+    }
+    .thinking-shell::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 8px; bottom: 8px;
+      width: 3px; border-radius: 999px;
+      background: linear-gradient(180deg, rgba(94,234,212,.94), rgba(16,163,127,.18));
+      z-index: 2;
+    }
+    .thinking-head {
+      display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+    }
+    .thinking-pulse {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: rgba(16,163,127,.9);
+      animation: thinkingPulseGlow 1.6s ease-in-out infinite;
+    }
+    @keyframes thinkingPulseGlow {
+      0%, 100% { opacity: .5; transform: scale(.85); }
+      50% { opacity: 1; transform: scale(1.15); }
+    }
+    .thinking-title {
+      font-size: 11px; font-weight: 600; color: #e6f7f0;
+    }
+    .thinking-sub {
+      font-size: 10px; color: #8eafa5; margin-bottom: 6px;
+    }
+    .thinking-bars {
+      display: flex; gap: 3px;
+    }
+    .thinking-bar {
+      width: 20px; height: 3px; border-radius: 2px;
+      background: rgba(16,163,127,.25);
+      animation: thinkingBarWave 1.4s ease-in-out infinite;
+    }
+    .thinking-bar:nth-child(2) { animation-delay: .2s; }
+    .thinking-bar:nth-child(3) { animation-delay: .4s; }
+    @keyframes thinkingBarWave {
+      0%, 100% { opacity: .3; transform: scaleX(.7); }
+      50% { opacity: .8; transform: scaleX(1); }
+    }
+    .typing-deck.phase-planning, .thinking-shell.phase-planning { border-color: rgba(251,191,36,0.35); }
+    .typing-deck.phase-planning::before, .thinking-shell.phase-planning .thinking-pulse { background: rgba(251,191,36,0.9); }
+    .typing-deck.phase-reading, .thinking-shell.phase-reading { border-color: rgba(99,102,241,0.35); }
+    .typing-deck.phase-reading::before, .thinking-shell.phase-reading .thinking-pulse { background: rgba(99,102,241,0.9); }
+    .thinking-shell.phase-working .thinking-pulse { background: rgba(16,163,127,0.9); }
+    .tool-btn.loading .tool-icon { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Copy button on AI bubbles */
+    .msg-copy-btn {
+      display: none; position: absolute; top: 4px; right: 4px;
+      background: rgba(30,30,30,0.85); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text-muted); cursor: pointer;
+      font-size: 10px; padding: 2px 6px; line-height: 1.4;
+      transition: color .15s, background .15s;
+    }
+    .msg.ai .msg-bubble { position: relative; }
+    .msg.ai .msg-bubble:hover .msg-copy-btn { display: block; }
+    .msg-copy-btn:hover { color: var(--text); background: var(--surface2); }
+
+    /* Slash prompt menu */
+    .slash-menu {
+      position: absolute; bottom: 100%; left: 0; right: 0;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; overflow: hidden; z-index: 100;
+      box-shadow: 0 4px 16px rgba(0,0,0,.4); margin-bottom: 4px;
+    }
+    .slash-menu-item {
+      padding: 7px 12px; cursor: pointer; font-size: 12px;
+      display: flex; align-items: baseline; gap: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .slash-menu-item:last-child { border-bottom: none; }
+    .slash-menu-item:hover, .slash-menu-item.active { background: var(--surface2); }
+    .slash-menu-item .slash-cmd { color: var(--accent); font-weight: 600; flex-shrink: 0; }
+    .slash-menu-item .slash-desc { color: var(--text-muted); font-size: 11px; }
+    .input-wrap { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .input-wrap textarea { flex: 1; width: 100%; }
   </style>
 </head>
 <body>
@@ -375,7 +462,10 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
     </button>
     <button class="input-tool-btn" id="btnWebSearch" title="联网搜索">🌐</button>
-    <textarea id="quickInput" placeholder="发送消息..." rows="1"></textarea>
+    <div class="input-wrap">
+      <div class="slash-menu" id="slashMenu" style="display:none;"></div>
+      <textarea id="quickInput" placeholder="发送消息..." rows="1"></textarea>
+    </div>
     <button class="send-btn" id="sendBtn">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
