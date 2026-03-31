@@ -31,3 +31,8 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
+
+# Dev notes
+DEV_PROGRESS_*.md
+CLAUDE.md
+CHANGELOG.md

@@ -8,6 +8,61 @@
   let annotationBubbles = [];
   let annotationsVisible = false;
 
+  // ── Language / i18n ──
+  let contentLanguage = 'zh';
+  const CT = {
+    zh: {
+      askAI: '问 AI', rewrite: '改写', translate: '翻译', summarize: '总结',
+      annotate: '标注', copy: '复制',
+      translating: '翻译中...', generatingTranslation: '正在生成译文...',
+      translateDot: '翻译 · {lang}', translateFailed: '翻译失败',
+      translationRequestFailed: '翻译请求失败',
+      scrollUp: '向上', scrollDown: '向下',
+      scrollSmall: '一小段', scrollMedium: '一段', scrollLarge: '一大段',
+      targetNotFound: '未找到目标元素',
+      clickTarget: '点击"{label}"',
+      missingInputText: '缺少要输入的文字',
+      targetNotTypable: '目标元素不支持输入',
+      inputReadOnly: '目标输入框只读', inputFailed: '输入失败',
+      typeInto: '在"{label}"输入"{text}"',
+      unsupportedAction: '不支持的页面动作',
+      closeHighlight: '关闭定位',
+      dragToSelect: '拖拽选择截图区域  ·  Esc 取消',
+      manualAnnotation: '📌 手动标注',
+      annotationPlaceholder: '输入注释后回车确认...',
+      annotationN: '📌 注释 {n}'
+    },
+    en: {
+      askAI: 'Ask AI', rewrite: 'Rewrite', translate: 'Translate', summarize: 'Summarize',
+      annotate: 'Annotate', copy: 'Copy',
+      translating: 'Translating...', generatingTranslation: 'Generating translation...',
+      translateDot: 'Translate · {lang}', translateFailed: 'Translation failed',
+      translationRequestFailed: 'Translation request failed',
+      scrollUp: 'up', scrollDown: 'down',
+      scrollSmall: 'a small amount', scrollMedium: 'a medium amount', scrollLarge: 'a large amount',
+      targetNotFound: 'Target element not found',
+      clickTarget: 'Click "{label}"',
+      missingInputText: 'Missing input text',
+      targetNotTypable: 'Target element not typable',
+      inputReadOnly: 'Target input is read-only', inputFailed: 'Input failed',
+      typeInto: 'Type "{text}" into "{label}"',
+      unsupportedAction: 'Unsupported page action',
+      closeHighlight: 'Close highlight',
+      dragToSelect: 'Drag to select area  ·  Esc to cancel',
+      manualAnnotation: '📌 Manual annotation',
+      annotationPlaceholder: 'Type annotation, press Enter...',
+      annotationN: '📌 Annotation {n}'
+    }
+  };
+  function ct(key, params) {
+    let s = CT[contentLanguage]?.[key] || CT.zh[key] || key;
+    if (params) Object.keys(params).forEach(k => { s = s.replace(`{${k}}`, params[k]); });
+    return s;
+  }
+  chrome.storage.local.get(['config'], (data) => {
+    if (data.config?.language) contentLanguage = data.config.language;
+  });
+
   // ── Selection menu config ──
   let selMenuConfig = {
     selMenuEnabled: true,
@@ -43,6 +98,10 @@
           changed = true;
         }
       });
+      if (c.language && c.language !== contentLanguage) {
+        contentLanguage = c.language;
+        changed = true;
+      }
       if (changed) rebuildSelectionAskBar();
     }
   });
@@ -60,16 +119,12 @@
   let lastFocusedEditable = null;
   let selectionAskBar = null;
   let selectionAskBarOffset = { dx: 0, dy: 0 };
+  let barJustDragged = false;
   let selectionAskTooltip = null;
   let selectionAskRaf = 0;
   let selectionAskShowTimer = 0;
   let selectionAskText = '';
-  let inlineTranslateBubble = null;
-  let inlineTranslateBubbleContent = null;
-  let inlineTranslateBubbleLabel = null;
-  let inlineTranslateBubbleAnchor = null;
-  let inlineTranslateRefreshRaf = 0;
-  let inlineTranslateBubbleOffset = { dx: 0, dy: 0 };
+  let inlineTranslateBubbles = []; // { bubble, highlight, getOffset, onMove, onUp, labelEl, contentEl }
   let sourceHighlightOverlay = null;
   let sourceHighlightDismissBtn = null;
   let sourceHighlightState = null;
@@ -81,12 +136,12 @@
   const INLINE_TRANSLATE_MAX_CHARS = 120;
   const INLINE_TRANSLATE_MAX_LINES = 3;
   const SELECTION_ACTIONS = [
-    { action: 'ask', label: '问 AI' },
-    { action: 'rewrite', label: '改写' },
-    { action: 'translate', label: '翻译' },
-    { action: 'summarize_selection', label: '总结' },
-    { action: 'annotate', label: '标注' },
-    { action: 'copy', label: '复制' }
+    { action: 'ask', labelKey: 'askAI' },
+    { action: 'rewrite', labelKey: 'rewrite' },
+    { action: 'translate', labelKey: 'translate' },
+    { action: 'summarize_selection', labelKey: 'summarize' },
+    { action: 'annotate', labelKey: 'annotate' },
+    { action: 'copy', labelKey: 'copy' }
   ];
 
   document.addEventListener('selectionchange', () => {
@@ -104,8 +159,6 @@
   }, true);
   window.addEventListener('scroll', hideSelectionAskBar, true);
   window.addEventListener('resize', hideSelectionAskBar, true);
-  window.addEventListener('scroll', scheduleInlineTranslateBubbleRefresh, true);
-  window.addEventListener('resize', scheduleInlineTranslateBubbleRefresh, true);
   window.addEventListener('scroll', scheduleSourceHighlightRefresh, true);
   window.addEventListener('resize', scheduleSourceHighlightRefresh, true);
 
@@ -170,7 +223,7 @@
       el && (
         selectionAskBar?.contains(el) ||
         selectionAskTooltip?.contains(el) ||
-        inlineTranslateBubble?.contains(el)
+        inlineTranslateBubbles.some(t => t.bubble.contains(el))
       )
     );
   }
@@ -243,48 +296,6 @@
     if (!value) return false;
     const lines = value.split(/\n+/).filter(Boolean).length;
     return value.length <= INLINE_TRANSLATE_MAX_CHARS && lines <= INLINE_TRANSLATE_MAX_LINES;
-  }
-
-  function cloneSelectionAnchor() {
-    const active = document.activeElement;
-    if (isTextInput(active)) {
-      const start = active.selectionStart ?? 0;
-      const end = active.selectionEnd ?? 0;
-      if (end > start) {
-        return {
-          getRect: () => active.isConnected ? active.getBoundingClientRect() : null
-        };
-      }
-    }
-
-    const sel = window.getSelection();
-    if (sel?.rangeCount) {
-      const range = sel.getRangeAt(0).cloneRange();
-      return {
-        getRect: () => {
-          const rect = range.getBoundingClientRect();
-          if (rect?.width || rect?.height) return rect;
-          const firstRect = range.getClientRects?.()[0];
-          return firstRect || null;
-        }
-      };
-    }
-
-    if (lastSelectionRange) {
-      const range = lastSelectionRange.cloneRange();
-      return {
-        getRect: () => {
-          const rect = range.getBoundingClientRect();
-          if (rect?.width || rect?.height) return rect;
-          const firstRect = range.getClientRects?.()[0];
-          return firstRect || null;
-        }
-      };
-    }
-
-    const rect = getCurrentSelectionRect();
-    if (!rect) return null;
-    return { getRect: () => rect };
   }
 
   function queueSelectionAskBarUpdate() {
@@ -457,7 +468,10 @@
       barDragState.startY = e.clientY;
       selectionAskBar.style.transform = `translate(${selectionAskBarOffset.dx}px, ${selectionAskBarOffset.dy}px)`;
     });
-    document.addEventListener('mouseup', () => { barDragState = null; });
+    document.addEventListener('mouseup', () => {
+      if (barDragState?.moved) barJustDragged = true;
+      barDragState = null;
+    });
 
     const sheen = document.createElement('div');
     Object.assign(sheen.style, {
@@ -494,8 +508,9 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.dataset.action = item.action;
-      btn.title = item.label;
-      btn.setAttribute('aria-label', item.label);
+      const label = ct(item.labelKey);
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
       Object.assign(btn.style, {
         display: 'inline-flex',
         alignItems: 'center',
@@ -525,7 +540,7 @@
         btn.style.borderColor = palette.buttonHoverBorder;
         btn.style.transform = 'translateY(-0.5px)';
         btn.style.boxShadow = palette.buttonHoverShadow;
-        showSelectionTooltip(btn, item.label);
+        showSelectionTooltip(btn, label);
       });
       btn.addEventListener('mouseleave', () => {
         btn.style.background = 'transparent';
@@ -534,7 +549,7 @@
         btn.style.boxShadow = 'none';
         hideSelectionTooltip();
       });
-      btn.addEventListener('focus', () => showSelectionTooltip(btn, item.label));
+      btn.addEventListener('focus', () => showSelectionTooltip(btn, label));
       btn.addEventListener('blur', hideSelectionTooltip);
       btn.addEventListener('click', (e) => runSelectionAction(e, item.action));
       selectionAskBar.appendChild(btn);
@@ -586,14 +601,24 @@
     if (selectionAskTooltip) selectionAskTooltip.style.display = 'none';
   }
 
-  function ensureInlineTranslateBubble() {
-    if (inlineTranslateBubble) return inlineTranslateBubble;
+  function createInlineTranslateBubble(range, labelText, contentText, isError) {
+    // 1. Highlight the original text with a blue mark
+    const highlight = document.createElement('mark');
+    highlight.className = '__easychat_translate_highlight';
+    Object.assign(highlight.style, {
+      background: 'rgba(59,130,246,0.15)',
+      borderRadius: '2px',
+      outline: '1px solid rgba(59,130,246,0.4)'
+    });
+    range.surroundContents(highlight);
+
+    // 2. Create bubble DOM
     const palette = getToolbarPalette();
-    inlineTranslateBubble = document.createElement('div');
-    Object.assign(inlineTranslateBubble.style, {
+    const bubble = document.createElement('div');
+    bubble.className = '__easychat_translate_bubble';
+    Object.assign(bubble.style, {
       position: 'fixed',
       zIndex: '2147483645',
-      display: 'none',
       maxWidth: '320px',
       minWidth: '180px',
       padding: '10px 12px 12px',
@@ -617,13 +642,14 @@
       userSelect: 'none'
     });
 
-    inlineTranslateBubbleLabel = document.createElement('div');
-    Object.assign(inlineTranslateBubbleLabel.style, {
+    const labelEl = document.createElement('div');
+    Object.assign(labelEl.style, {
       fontSize: '11px',
       fontWeight: '700',
-      color: '#10a37f',
+      color: isError ? '#ef4444' : '#10a37f',
       letterSpacing: '.02em'
     });
+    labelEl.textContent = labelText;
 
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
@@ -638,26 +664,26 @@
       padding: '0',
       margin: '0'
     });
-    closeBtn.addEventListener('click', () => clearInlineTranslateBubble());
 
-    inlineTranslateBubbleContent = document.createElement('div');
-    Object.assign(inlineTranslateBubbleContent.style, {
+    const contentEl = document.createElement('div');
+    Object.assign(contentEl.style, {
       fontSize: '13px',
       lineHeight: '1.6',
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
       userSelect: 'text'
     });
+    contentEl.textContent = contentText;
 
-    head.appendChild(inlineTranslateBubbleLabel);
+    head.appendChild(labelEl);
     head.appendChild(closeBtn);
-    inlineTranslateBubble.appendChild(head);
-    inlineTranslateBubble.appendChild(inlineTranslateBubbleContent);
-    document.documentElement.appendChild(inlineTranslateBubble);
+    bubble.appendChild(head);
+    bubble.appendChild(contentEl);
+    document.documentElement.appendChild(bubble);
 
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
+    // 3. Drag support
+    let dx = 0, dy = highlight.getBoundingClientRect().height + 6;
+    let lastX = 0, lastY = 0, dragging = false;
     head.addEventListener('mousedown', (e) => {
       if (e.target === closeBtn) return;
       dragging = true;
@@ -665,73 +691,40 @@
       lastY = e.clientY;
       e.preventDefault();
     });
-    document.addEventListener('mousemove', (e) => {
+    const onMove = (e) => {
       if (!dragging) return;
-      inlineTranslateBubbleOffset.dx += e.clientX - lastX;
-      inlineTranslateBubbleOffset.dy += e.clientY - lastY;
+      dx += e.clientX - lastX;
+      dy += e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
-      positionInlineTranslateBubble();
+    };
+    const onUp = () => { dragging = false; };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+
+    const entry = { bubble, highlight, getOffset: () => ({ dx, dy }), onMove, onUp, labelEl, contentEl };
+
+    // 4. Close button: remove bubble + unwrap highlight + cleanup
+    closeBtn.addEventListener('click', () => {
+      bubble.remove();
+      if (onMove) document.removeEventListener('mousemove', onMove);
+      if (onUp) document.removeEventListener('mouseup', onUp);
+      if (highlight.parentNode) {
+        const parent = highlight.parentNode;
+        while (highlight.firstChild) parent.insertBefore(highlight.firstChild, highlight);
+        highlight.remove();
+      }
+      annotationBubbles = annotationBubbles.filter(a => a.bubble !== bubble);
+      inlineTranslateBubbles = inlineTranslateBubbles.filter(t => t.bubble !== bubble);
+      if (!annotationBubbles.length) stopRaf();
     });
-    document.addEventListener('mouseup', () => {
-      dragging = false;
-    });
 
-    return inlineTranslateBubble;
-  }
+    // 5. Push into both arrays and start RAF
+    annotationBubbles.push(entry);
+    inlineTranslateBubbles.push(entry);
+    startRaf();
 
-  function positionInlineTranslateBubble() {
-    if (!inlineTranslateBubble || !inlineTranslateBubbleAnchor?.getRect) return;
-    const rect = inlineTranslateBubbleAnchor.getRect();
-    if (!rect) return;
-    const bubbleRect = inlineTranslateBubble.getBoundingClientRect();
-    const gap = 10;
-    let left = rect.right + gap;
-    if (left + bubbleRect.width > window.innerWidth - 8) {
-      left = Math.max(8, Math.min(rect.left, window.innerWidth - bubbleRect.width - 8));
-    }
-    const belowTop = rect.bottom + gap;
-    const aboveTop = rect.top - bubbleRect.height - gap;
-    const top = belowTop + bubbleRect.height <= window.innerHeight - 8
-      ? belowTop
-      : Math.max(8, aboveTop);
-    left = Math.max(8, Math.min(left + inlineTranslateBubbleOffset.dx, window.innerWidth - bubbleRect.width - 8));
-    const maxTop = Math.max(8, window.innerHeight - bubbleRect.height - 8);
-    const nextTop = Math.max(8, Math.min(top + inlineTranslateBubbleOffset.dy, maxTop));
-    inlineTranslateBubble.style.left = `${left}px`;
-    inlineTranslateBubble.style.top = `${nextTop}px`;
-  }
-
-  function scheduleInlineTranslateBubbleRefresh() {
-    if (!inlineTranslateBubble || inlineTranslateBubble.style.display === 'none') return;
-    if (inlineTranslateRefreshRaf) cancelAnimationFrame(inlineTranslateRefreshRaf);
-    inlineTranslateRefreshRaf = requestAnimationFrame(() => {
-      inlineTranslateRefreshRaf = 0;
-      positionInlineTranslateBubble();
-    });
-  }
-
-  function clearInlineTranslateBubble() {
-    if (inlineTranslateRefreshRaf) {
-      cancelAnimationFrame(inlineTranslateRefreshRaf);
-      inlineTranslateRefreshRaf = 0;
-    }
-    inlineTranslateBubbleAnchor = null;
-    inlineTranslateBubbleOffset = { dx: 0, dy: 0 };
-    if (inlineTranslateBubble) inlineTranslateBubble.style.display = 'none';
-  }
-
-  function showInlineTranslateBubble(anchor, label, text, error) {
-    const bubble = ensureInlineTranslateBubble();
-    if (anchor && anchor !== inlineTranslateBubbleAnchor) {
-      inlineTranslateBubbleOffset = { dx: 0, dy: 0 };
-    }
-    inlineTranslateBubbleAnchor = anchor || inlineTranslateBubbleAnchor;
-    inlineTranslateBubbleLabel.textContent = label;
-    inlineTranslateBubbleLabel.style.color = error ? '#ef4444' : '#10a37f';
-    inlineTranslateBubbleContent.textContent = text;
-    inlineTranslateBubble.style.display = 'block';
-    positionInlineTranslateBubble();
+    return entry;
   }
 
   async function runSelectionAction(e, action) {
@@ -746,7 +739,6 @@
     }
     const selectionInfo = getCurrentSelectionInfo();
     const useInlineTranslate = action === 'translate' && shouldUseInlineTranslate(text);
-    const translateAnchor = useInlineTranslate ? cloneSelectionAnchor() : null;
 
     hideSelectionTooltip();
     selectionAskBar.style.opacity = '0.72';
@@ -768,28 +760,41 @@
       return;
     }
 
-    if (useInlineTranslate && translateAnchor) {
-      showInlineTranslateBubble(translateAnchor, '翻译中...', '正在生成译文...');
-      const resp = await new Promise(resolve => {
-        chrome.runtime.sendMessage({
-          type: 'TRANSLATE_SELECTION_INLINE',
-          text
-        }, (response) => {
-          if (chrome.runtime.lastError) resolve(null);
-          else resolve(response);
-        });
-      });
-      selectionAskBar.style.opacity = '1';
-      selectionAskBar.style.pointerEvents = '';
-      hideSelectionAskBar();
-      window.getSelection()?.removeAllRanges?.();
-      if (resp?.ok) {
-        const label = resp.targetLanguage ? `翻译 · ${resp.targetLanguage}` : '翻译';
-        showInlineTranslateBubble(translateAnchor, label, resp.translation || '');
-      } else {
-        showInlineTranslateBubble(translateAnchor, '翻译失败', resp?.message || '翻译请求失败', true);
+    if (useInlineTranslate) {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount) return;
+      const range = sel.getRangeAt(0).cloneRange();
+      sel.removeAllRanges();
+      let entry;
+      try {
+        entry = createInlineTranslateBubble(range, ct('translating'), ct('generatingTranslation'));
+      } catch (err) {
+        // surroundContents can fail on cross-node ranges; fall through to panel
       }
-      return;
+      if (entry) {
+        selectionAskBar.style.opacity = '1';
+        selectionAskBar.style.pointerEvents = '';
+        hideSelectionAskBar();
+        const resp = await new Promise(resolve => {
+          chrome.runtime.sendMessage({
+            type: 'TRANSLATE_SELECTION_INLINE',
+            text
+          }, (response) => {
+            if (chrome.runtime.lastError) resolve(null);
+            else resolve(response);
+          });
+        });
+        if (resp?.ok) {
+          entry.labelEl.textContent = resp.targetLanguage ? ct('translateDot', { lang: resp.targetLanguage }) : ct('translate');
+          entry.labelEl.style.color = '#10a37f';
+          entry.contentEl.textContent = resp.translation || '';
+        } else {
+          entry.labelEl.textContent = ct('translateFailed');
+          entry.labelEl.style.color = '#ef4444';
+          entry.contentEl.textContent = resp?.message || ct('translationRequestFailed');
+        }
+        return;
+      }
     }
 
     const resp = await new Promise(resolve => {
@@ -820,7 +825,11 @@
       selectionAskBar.style.display = 'none';
       selectionAskBar.style.pointerEvents = '';
       selectionAskBar.style.opacity = '1';
+      selectionAskBar.style.transform = '';
     }
+    selectionAskBarOffset.dx = 0;
+    selectionAskBarOffset.dy = 0;
+    barJustDragged = false;
     hideSelectionTooltip();
   }
 
@@ -838,6 +847,12 @@
     selectionAskText = text;
     const bar = ensureSelectionAskBar();
     bar.style.display = 'flex';
+
+    if (barJustDragged || (selectionAskBarOffset.dx !== 0 || selectionAskBarOffset.dy !== 0)) {
+      barJustDragged = false;
+      return;
+    }
+
     selectionAskBarOffset.dx = 0;
     selectionAskBarOffset.dy = 0;
     bar.style.transform = '';
@@ -983,7 +998,7 @@
       el && (
         selectionAskBar?.contains(el) ||
         selectionAskTooltip?.contains(el) ||
-        inlineTranslateBubble?.contains(el) ||
+        inlineTranslateBubbles.some(t => t.bubble.contains(el)) ||
         sourceHighlightOverlay?.contains(el) ||
         sourceHighlightDismissBtn?.contains(el)
       )
@@ -1203,13 +1218,13 @@
       return {
         ok: true,
         action: 'scroll',
-        summary: `${direction === 'up' ? '向上' : '向下'}滚动${amountKey === 'small' ? '一小段' : amountKey === 'large' ? '一大段' : '一段'}`
+        summary: `${direction === 'up' ? ct('scrollUp') : ct('scrollDown')}${amountKey === 'small' ? ct('scrollSmall') : amountKey === 'large' ? ct('scrollLarge') : ct('scrollMedium')}`
       };
     }
 
     const entry = getRegisteredPageActionTarget(step?.targetId);
     if (!entry) {
-      return { ok: false, action, error: 'target_not_found', summary: '未找到目标元素' };
+      return { ok: false, action, error: 'target_not_found', summary: ct('targetNotFound') };
     }
 
     entry.element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
@@ -1226,14 +1241,14 @@
         action: 'click',
         targetId: entry.id,
         targetLabel: entry.label,
-        summary: `点击“${entry.label || entry.kind}”`
+        summary: ct('clickTarget', { label: entry.label || entry.kind })
       };
     }
 
     if (action === 'type') {
       const text = String(step?.text ?? '').trim();
       if (!text) {
-        return { ok: false, action, error: 'empty_text', summary: '缺少要输入的文字' };
+        return { ok: false, action, error: 'empty_text', summary: ct('missingInputText') };
       }
       let result = null;
       if (entry.kind === 'input' || entry.kind === 'textarea') {
@@ -1241,14 +1256,14 @@
       } else if (entry.kind === 'editor') {
         result = replaceContentEditableValue(entry.element, text);
       } else {
-        return { ok: false, action, error: 'target_not_typable', summary: '目标元素不支持输入' };
+        return { ok: false, action, error: 'target_not_typable', summary: ct('targetNotTypable') };
       }
       if (!result?.ok) {
         return {
           ok: false,
           action,
           error: result?.error || 'type_failed',
-          summary: result?.error === 'input_read_only' ? '目标输入框只读' : '输入失败'
+          summary: result?.error === 'input_read_only' ? ct('inputReadOnly') : ct('inputFailed')
         };
       }
       return {
@@ -1257,11 +1272,11 @@
         targetId: entry.id,
         targetLabel: entry.label,
         text,
-        summary: `在“${entry.label || entry.kind}”输入“${clipPageActionText(text, 36)}”`
+        summary: ct('typeInto', { label: entry.label || entry.kind, text: clipPageActionText(text, 36) })
       };
     }
 
-    return { ok: false, action, error: 'unsupported_action', summary: '不支持的页面动作' };
+    return { ok: false, action, error: 'unsupported_action', summary: ct('unsupportedAction') };
   }
 
   async function executePageActions(actions) {
@@ -1417,7 +1432,7 @@
     sourceHighlightDismissBtn = document.createElement('button');
     sourceHighlightDismissBtn.type = 'button';
     sourceHighlightDismissBtn.textContent = '×';
-    sourceHighlightDismissBtn.title = '关闭定位';
+    sourceHighlightDismissBtn.title = ct('closeHighlight');
     Object.assign(sourceHighlightDismissBtn.style, {
       position: 'fixed',
       top: '16px',
@@ -1712,7 +1727,7 @@
       borderRadius: '20px', fontSize: '13px', pointerEvents: 'none',
       border: '1px solid #2e2e2e', zIndex: '2147483647'
     });
-    hint.textContent = '拖拽选择截图区域  ·  Esc 取消';
+    hint.textContent = ct('dragToSelect');
     selectOverlay.appendChild(hint);
 
     let startX, startY, dragging = false;
@@ -1813,7 +1828,7 @@
 
       const label = document.createElement('div');
       label.style.cssText = 'font-weight:600;color:#10a37f;margin-bottom:4px;font-size:11px;';
-      label.textContent = '📌 手动标注';
+      label.textContent = ct('manualAnnotation');
 
       const input = document.createElement('input');
       Object.assign(input.style, {
@@ -1822,7 +1837,7 @@
         padding: '4px 6px', fontSize: '12px', outline: 'none',
         boxSizing: 'border-box'
       });
-      input.placeholder = '输入注释后回车确认...';
+      input.placeholder = ct('annotationPlaceholder');
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
@@ -1939,7 +1954,7 @@
 
       const label = document.createElement('div');
       label.style.cssText = 'font-weight:600;color:#10a37f;margin-bottom:4px;font-size:11px;';
-      label.textContent = `📌 注释 ${i + 1}`;
+      label.textContent = ct('annotationN', { n: i + 1 });
 
       const content = document.createElement('div');
       content.textContent = ann.comment;
@@ -2031,6 +2046,7 @@
       }
     });
     annotationBubbles = [];
+    inlineTranslateBubbles = [];
     annotationsVisible = false;
   }
 

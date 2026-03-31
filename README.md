@@ -1,87 +1,117 @@
 # EasyChat for Edge
 
-A powerful AI chat assistant browser extension supporting 200+ mainstream AI models.
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue.svg)](manifest.json)
+[![Edge Extension](https://img.shields.io/badge/Edge-Extension-blue?logo=microsoftedge)](https://www.microsoft.com/edge)
+[![Chrome Compatible](https://img.shields.io/badge/Chrome-Compatible-yellow?logo=googlechrome)](https://www.google.com/chrome/)
 
-## ✨ Key Features
+[中文说明](README_CN.md)
 
-### 🤖 Support 200+ AI Models
-- **OpenAI**: GPT-5.x, GPT-4o, GPT-4, GPT-3.5, o1/o3 series
-- **Anthropic**: Claude 4.6, Claude 3.7, Claude 3.5, Claude 3 series
-- **Google**: Gemini 2.5, Gemini 2.0, Gemini 1.5 series
-- **DeepSeek**: Chat, Reasoner, R1, V3, Coder series
-- **Chinese Models**: Qwen, GLM, ERNIE, Spark, etc.
-- **Open Source**: Llama, Mistral, Qwen, etc.
-- **Local Deployment**: Ollama, LM Studio, vLLM, etc.
-- **Custom Models**: Support any OpenAI-compatible API
+A free, open-source AI chat assistant browser extension for Microsoft Edge and Google Chrome. Connect to 200+ AI models — ChatGPT, Claude, Gemini, DeepSeek, Llama, Qwen, and more — all from your browser sidebar, popup, or full window. No server required, no account needed, just bring your own API key.
 
-### 🎨 Interface Features
-- Real-time streaming output
-- Live Markdown rendering
-- Code highlighting and one-click copy
-- Custom user/AI avatars
-- Multiple profile management
-- Conversation history management
+<!-- Screenshot placeholder: replace with actual screenshot -->
+<!-- ![Screenshot](screenshots/demo.png) -->
 
-### ⚙️ Advanced Parameters
-- Temperature (creativity)
-- Top P (sampling range)
-- Frequency Penalty
-- Presence Penalty
-- Max Token limit
-- Context message limit
+## Why EasyChat?
 
-### 🌐 Web Search
-- Tavily Search
-- Serper (Google)
-- SerpAPI
-- Bing Search API
-- Brave Search
-- Custom Search API
+- **One extension, all models** — switch between GPT, Claude, Gemini, DeepSeek and 200+ others without leaving your browser
+- **Privacy first** — your API key stays in your browser, nothing goes through our servers
+- **Zero dependencies** — pure JavaScript, no Node.js, no npm, no build step
+- **Works offline-ready** — once loaded, the extension runs entirely in your browser
 
-### 📊 Data Statistics
-- Token usage statistics
-- Statistics by model
-- Separate input/output token tracking
+## Supported AI Models
 
-## 🚀 Installation
+| Provider | Models |
+|----------|--------|
+| **OpenAI** | GPT-5.x, GPT-4o, GPT-4o Mini, GPT-4 Turbo, GPT-4, GPT-3.5 Turbo, o1, o1-mini, o3-mini |
+| **Anthropic** | Claude 4.6 Opus, Claude 4.6 Sonnet, Claude 3.7 Sonnet, Claude 3.5 Sonnet, Claude 3.5 Haiku, Claude 3 Opus |
+| **Google** | Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.0 Flash, Gemini 1.5 Pro, Gemini 1.5 Flash |
+| **DeepSeek** | DeepSeek Chat, DeepSeek Reasoner, DeepSeek R1, DeepSeek V3, DeepSeek Coder |
+| **Chinese AI** | Qwen (通义千问), GLM (智谱), ERNIE (文心一言), Spark (讯飞星火), Doubao (豆包), Moonshot (月之暗面), Yi (零一万物) |
+| **Open Source** | Llama 3, Mistral, Mixtral, Qwen, Yi, Phi, Command R |
+| **Local** | Ollama, LM Studio, vLLM, LocalAI, text-generation-webui |
+| **Any** | Any OpenAI-compatible API endpoint |
 
-1. Download this project
-2. Open Edge browser, go to `edge://extensions/`
-3. Enable "Developer mode"
-4. Click "Load unpacked"
-5. Select the project folder
-6. Click the extension icon to open chat interface
+## Features
 
-## 📝 Configuration
+### AI Chat
+- Real-time streaming responses with live Markdown rendering
+- Code syntax highlighting with one-click copy
+- Conversation history — save, search, continue previous chats
+- Multiple profiles — different API keys, models, and parameters per profile
+- Custom avatars for user and AI
+- Chinese / English bilingual interface
+- Popup, sidebar, and full-window modes
 
-### API Configuration
-1. Click "Settings" in the sidebar
-2. Fill in Base URL (optional, leave empty for official)
-3. Fill in API Key
-4. Save settings
+### Selection Tools
+- Select any text on any webpage to get a floating action toolbar
+- **Ask AI** — ask questions about selected text
+- **Rewrite** — rephrase, improve, or change tone
+- **Translate** — inline translation bubble with highlighted source text
+- **Summarize** — get a quick summary
+- **Annotate** — pin notes to any part of a page
+- **Copy** — one-click copy
+
+### Browser Agent
+- Control your browser with natural language
+- Click buttons, fill forms, scroll pages, navigate
+- Ask questions about your recent browsing history
+- Smart routing — automatically decides between chat and browser action
+
+### Web Search Integration
+- Tavily, Serper (Google), SerpAPI, Bing Search, Brave Search
+- Custom search API support
+- AI answers grounded in real-time web results
+
+### Page Tools
+- Screenshot conversations
+- Auto-annotate and highlight page content
+- Summarize entire web pages
+- Source highlighting — click to locate where AI's answer came from
+
+### Advanced Parameters
+- Temperature, Top P, Frequency Penalty, Presence Penalty
+- Max token limit, context message limit
+- Token usage statistics per model
+
+## Installation
+
+1. Clone or download this repository
+2. Open Edge and go to `edge://extensions/`
+3. Enable **Developer mode**
+4. Click **Load unpacked** and select the project folder
+5. Click the extension icon to start
+
+> Works on Chrome too — load it at `chrome://extensions/`.
+
+## Configuration
+
+1. Click **Settings** in the sidebar
+2. Enter your API Base URL (optional) and API Key
+3. Choose a model and start chatting
 
 ### Multiple Profiles
-1. Click "Profiles" tab
-2. Enter profile name, click "Create"
-3. Switch between profiles to use different models
+Create separate profiles for different providers — e.g. one for OpenAI, one for Claude, one for a local Ollama instance.
 
 ### Web Search
-1. Select search engine in "AI Parameters" tab
-2. Fill in corresponding API Key
-3. Click 🌐 button in top bar to enable/disable web search
+Select a search provider in AI Parameters, enter the API key, and toggle the 🌐 button to enable search-augmented answers.
 
-## 🔧 Tech Stack
+## Tech Stack
 
-- Manifest V3
-- Chrome Storage API
-- Marked.js (Markdown rendering)
-- Server-Sent Events (streaming)
-- Base64 image storage
+- Manifest V3 browser extension
+- Pure JavaScript — zero npm dependencies, no build step
+- Chrome Storage API for data persistence
+- Marked.js for Markdown rendering
+- Server-Sent Events (SSE) for streaming
 
-## 📄 License
+## Contributing
 
-MIT License
+Contributions welcome! Fork, branch, commit, and open a PR.
 
-## 🙏 Acknowledgments
+## License
 
-Thanks to all AI model providers and the open source community for their support.
+[MIT](LICENSE)
+
+## Keywords
+
+`edge extension` `chrome extension` `chatgpt extension` `claude extension` `gemini extension` `ai assistant` `browser ai` `ai chat` `ai sidebar` `gpt browser` `llm client` `openai client` `anthropic client` `deepseek client` `ai translation` `ai summarizer` `ai rewriter` `browser agent` `web search ai` `ollama gui` `lm studio client` `free ai extension` `open source ai chat` `manifest v3` `chatgpt alternative` `ai browser extension` `multi model ai` `ai copilot` `ai productivity` `qwen` `llama` `mistral`

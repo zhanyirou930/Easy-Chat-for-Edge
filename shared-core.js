@@ -93,7 +93,8 @@
     });
 
     fileAttachments.forEach(file => {
-      parts.push({ type: 'text', text: `\n\n[文件: ${file.name}]\n\`\`\`\n${file.text}\n\`\`\`` });
+      const fileLabel = opts.en ? 'File' : '文件';
+      parts.push({ type: 'text', text: `\n\n[${fileLabel}: ${file.name}]\n\`\`\`\n${file.text}\n\`\`\`` });
       parts.push({ type: 'file_text', name: file.name });
     });
 
@@ -131,7 +132,7 @@
 
     (opts.imageAttachments || []).forEach(image => {
       sources.push(createContextSource(image.kind || 'image', {
-        label: image.label || image.name || '图片',
+        label: image.label || image.name || (opts.en ? 'Image' : '图片'),
         name: image.name,
         mimeType: image.mimeType
       }));
@@ -139,7 +140,7 @@
 
     (opts.fileAttachments || []).forEach(file => {
       sources.push(createContextSource('file', {
-        label: file.name || '文件',
+        label: file.name || (opts.en ? 'File' : '文件'),
         name: file.name,
         chars: file.chars || file.text?.length || 0,
         preview: previewText(file.preview || file.text || '')
@@ -152,7 +153,7 @@
 
     if (opts.webSearchEnabled && !(opts.webSearchSources || []).length) {
       sources.push(createContextSource('web_search', {
-        label: opts.webSearchLabel || '联网搜索'
+        label: opts.webSearchLabel || (opts.en ? 'Web Search' : '联网搜索')
       }));
     }
 
@@ -188,9 +189,9 @@
     });
   }
 
-  function describeContextSource(source) {
+  function describeContextSource(source, en) {
     const icon = SOURCE_KIND_ICONS[source?.kind] || '📌';
-    const label = source?.label || source?.name || '上下文';
+    const label = source?.label || source?.name || (en ? 'Context' : '上下文');
     const titleParts = [];
     if (source?.title) titleParts.push(source.title);
     if (source?.url) titleParts.push(source.url);
@@ -222,13 +223,22 @@
     ].filter(Boolean).join('\n');
   }
 
-  function buildSourceAwareInstruction(context) {
+  function buildSourceAwareInstruction(context, en) {
     const ctx = context || {};
     const sources = dedupeContextSources(ctx.contextSources || []);
     if (!sources.length) return '';
     const list = sources
-      .map((source, idx) => `${idx + 1}. ${describeContextSource(source).text}`)
+      .map((source, idx) => `${idx + 1}. ${describeContextSource(source, en).text}`)
       .join('\n');
+    if (en) {
+      return [
+        'If the latest user message includes attached context, ground the answer in that context first.',
+        'Start the reply with a short line: `Reference: ...` and only list labels from the available sources below.',
+        'If part of the answer goes beyond the provided context, explicitly mark that part as `Speculation`.',
+        'Do not claim to have checked or cited any source outside the available sources below.',
+        `Available sources:\n${list}`
+      ].join('\n');
+    }
     return [
       'If the latest user message includes attached context, ground the answer in that context first.',
       'Start the reply with a short Chinese line: `参考来源：...` and only list labels from the available sources below.',
@@ -250,14 +260,14 @@
     });
   }
 
-  function buildThinkingIndicatorHtml(title, subtitle) {
+  function buildThinkingIndicatorHtml(title, subtitle, en) {
     return [
       '<div class="thinking-shell">',
       '<div class="thinking-head">',
       '<span class="thinking-pulse"></span>',
-      `<span class="thinking-title">${escapeHtml(title || 'AI 正在思考')}</span>`,
+      `<span class="thinking-title">${escapeHtml(title || (en ? 'AI is thinking' : 'AI 正在思考'))}</span>`,
       '</div>',
-      `<div class="thinking-sub">${escapeHtml(subtitle || '已收到请求，正在生成回复')}</div>`,
+      `<div class="thinking-sub">${escapeHtml(subtitle || (en ? 'Request received, generating reply' : '已收到请求，正在生成回复'))}</div>`,
       '<div class="thinking-bars">',
       '<span class="thinking-bar"></span>',
       '<span class="thinking-bar"></span>',
@@ -305,11 +315,11 @@
     return message;
   }
 
-  function appendSearchResultToLastUserMessage(messages, searchResult, label) {
+  function appendSearchResultToLastUserMessage(messages, searchResult, label, en) {
     if (!searchResult || !messages?.length) return messages;
     const searchText = getSearchResultText(searchResult);
     if (!searchText) return messages;
-    const prefix = `[${label || '联网搜索结果'}]\n${searchText}`;
+    const prefix = `[${label || (en ? 'Web search results' : '联网搜索结果')}]\n${searchText}`;
     const last = messages[messages.length - 1];
     if (!last || last.role !== 'user') return messages;
 
@@ -328,7 +338,7 @@
     const title = String(item?.title || item?.name || '').trim();
     const url = String(item?.url || item?.link || '').trim();
     const preview = previewText(item?.snippet || item?.description || item?.content || item?.preview || '', 240);
-    const fallbackLabel = `${labels?.webSearchResult || '搜索结果'} ${idx + 1}`;
+    const fallbackLabel = `${labels?.webSearchResult || (labels?.en ? 'Search result' : '搜索结果')} ${idx + 1}`;
     return createContextSource('web_search', {
       label: title ? previewText(title, 42) : fallbackLabel,
       title: title || undefined,
@@ -515,10 +525,12 @@
     const opts = options || {};
     const engine = config?.searchEngine || 'tavily';
     const key = config?.searchApiKey;
+    const en = !!opts.en;
     const labels = {
-      referenceSource: opts.referenceSourceLabel || '参考来源：',
-      searchResults: opts.searchResultsLabel || '搜索结果：',
-      noTitle: opts.noTitleLabel || '无标题'
+      referenceSource: opts.referenceSourceLabel || (en ? 'Reference sources:' : '参考来源：'),
+      searchResults: opts.searchResultsLabel || (en ? 'Search results:' : '搜索结果：'),
+      noTitle: opts.noTitleLabel || (en ? 'No title' : '无标题'),
+      en
     };
 
     if (!key && engine !== 'custom' && engine !== 'custom2' && engine !== 'custom3') {
@@ -568,7 +580,7 @@
     if (!res.ok) return null;
     const data = await res.json();
     let text = '';
-    if (data.answer) text += `搜索摘要：${data.answer}\n\n`;
+    if (data.answer) text += `${labels.en ? 'Search summary: ' : '搜索摘要：'}${data.answer}\n\n`;
     if (data.results?.length) {
       text += `${labels.referenceSource}\n`;
       data.results.forEach((item, idx) => {

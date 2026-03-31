@@ -418,7 +418,7 @@ async function startBackgroundStream(options) {
       }
 
       const finalText = sanitizeVisibleReasoningText(state.rawFull, state.model).trim() || extractStreamableAnswerText(state.rawFull, state.model).trim();
-      if (!finalText) throw new Error('模型未返回可显示正文');
+      if (!finalText) throw new Error(isEnglishLanguage(opts.language) ? 'Model returned no displayable content' : '模型未返回可显示正文');
       await persistAssistantMessage(sessionId, finalText, opts.assistantMeta || null);
       broadcastStreamEvent({
         type: 'STREAM_DONE',
@@ -456,8 +456,9 @@ function containsCjk(text) {
   return /[\u3400-\u9FFF\uF900-\uFAFF]/.test(String(text || ''));
 }
 
-function guessTranslateTarget(text) {
-  return containsCjk(text) ? '英文' : '中文';
+function guessTranslateTarget(text, language) {
+  const en = isEnglishLanguage(language);
+  return containsCjk(text) ? (en ? 'English' : '英文') : (en ? 'Chinese' : '中文');
 }
 
 async function getEffectiveConfig() {
@@ -762,16 +763,32 @@ function buildRecentHistoryQueryCandidates(text, preferredQuery = '') {
   return out.slice(0, 5);
 }
 
-function buildDirectToolRoutePrompt(question, tab) {
+function buildDirectToolRoutePrompt(question, tab, language) {
+  if (isEnglishLanguage(language)) {
+    return [
+      'You are EasyChat\'s direct dialog router. Based on a single natural language input from the user, decide whether to invoke browser capabilities.',
+      'Return only JSON, no markdown, no explanation.',
+      'Available modes: chat, browser_action, recent_history_answer, recent_history_compare.',
+      'If it is just normal chat, explanation, summary, or translation, return {“mode”:”chat”}.',
+      'If it requires opening a webpage, clicking, typing, scrolling, viewing the current page, or opening a recently visited site, return {“mode”:”browser_action”,”instruction”:”...”}. instruction must be a clear action target (e.g. site name, URL, button name), not vague confirmations like “yes”, “ok”, “that one”.',
+      'If the user is asking about recently viewed/browsed/visited content but does not need page interaction, return {“mode”:”recent_history_answer”,”query”:”keywords”}.',
+      'If the user is comparing recently viewed items or asking which is better, return {“mode”:”recent_history_compare”,”query”:”keywords”}.',
+      'query should be as short as possible, keeping only core search terms.',
+      'instruction should preserve the actual browser action the user wants, do not rewrite it as an analysis task.',
+      `Current page title: ${tab?.title || ''}`,
+      `Current page URL: ${tab?.url || ''}`,
+      `User input: ${question}`
+    ].join('\n');
+  }
   return [
     '你是 EasyChat 的直接对话路由器。根据用户一句自然语言，判断是否要调用浏览器能力。',
     '只返回 JSON，不要 markdown，不要解释。',
     '可选 mode 只有四种：chat、browser_action、recent_history_answer、recent_history_compare。',
-    '如果只是普通聊天、解释、总结、翻译，返回 {"mode":"chat"}。',
-    '如果需要打开网页、点击、输入、滚动、查看当前页面、打开最近访问的网站，返回 {"mode":"browser_action","instruction":"..."}。instruction 必须是明确的操作目标（如网站名、URL、按钮名），不能是"对哇""好的""确认""就是它"等口语确认词。',
-    '如果是在问最近看过/浏览过/访问过的内容，但不需要操作页面，只需要根据最近浏览记录回答，返回 {"mode":"recent_history_answer","query":"关键词"}。',
-    '如果是在问最近看过的几个东西有什么区别、哪个好、怎么选，返回 {"mode":"recent_history_compare","query":"关键词"}。',
-    'query 要尽量短，只保留核心检索词，例如“牙刷”“penguin api”“路由器”。',
+    '如果只是普通聊天、解释、总结、翻译，返回 {“mode”:”chat”}。',
+    '如果需要打开网页、点击、输入、滚动、查看当前页面、打开最近访问的网站，返回 {“mode”:”browser_action”,”instruction”:”...”}。instruction 必须是明确的操作目标（如网站名、URL、按钮名），不能是”对哇””好的””确认””就是它”等口语确认词。',
+    '如果是在问最近看过/浏览过/访问过的内容，但不需要操作页面，只需要根据最近浏览记录回答，返回 {“mode”:”recent_history_answer”,”query”:”关键词”}。',
+    '如果是在问最近看过的几个东西有什么区别、哪个好、怎么选，返回 {“mode”:”recent_history_compare”,”query”:”关键词”}。',
+    'query 要尽量短，只保留核心检索词，例如”牙刷””penguin api””路由器”。',
     'instruction 要保留用户真正想让浏览器执行的动作，不要改写成分析任务。',
     `当前网页标题：${tab?.title || ''}`,
     `当前网页链接：${tab?.url || ''}`,
@@ -829,26 +846,28 @@ function mergeDirectToolRoute(route, heuristic, question) {
 }
 
 function buildRecentHistoryAnswerPrompt(question, pages, language = 'zh') {
+  const en = isEnglishLanguage(language);
   const blocks = (pages || []).map((page, index) => [
     `${index + 1}.`,
-    `标题：${page.title || ''}`,
-    `链接：${page.url || ''}`,
-    `摘录：${String(page.text || '').slice(0, 2600)}`
+    `${en ? 'Title' : '标题'}：${page.title || ''}`,
+    `${en ? 'Link' : '链接'}：${page.url || ''}`,
+    `${en ? 'Excerpt' : '摘录'}：${String(page.text || '').slice(0, 2600)}`
   ].filter(Boolean).join('\n'));
-  if (isEnglishLanguage(language)) {
+  if (en) {
     return `Answer the user's question primarily based on the recently viewed pages below. If the pages are insufficient, explicitly mark that part as "Inference". When there are multiple matches, summarize the common pattern first, then point out the important differences.\n\nUser Question: ${question}\n\nRecently Viewed Pages:\n${blocks.join('\n\n')}`;
   }
   return `请优先基于以下最近浏览的页面回答用户问题。如果页面信息不足以支持结论，请明确标注为“推测”。如果匹配到多个页面，请先概括共同点，再补充重要差异。\n\n用户问题：${question}\n\n最近浏览页面：\n${blocks.join('\n\n')}`;
 }
 
 function buildRecentViewedComparePrompt(question, pages, language = 'zh') {
+  const en = isEnglishLanguage(language);
   const blocks = (pages || []).map((page, index) => [
     `${index + 1}.`,
-    `标题：${page.title || ''}`,
-    `链接：${page.url || ''}`,
-    `摘录：${String(page.text || '').slice(0, 3200)}`
+    `${en ? 'Title' : '标题'}：${page.title || ''}`,
+    `${en ? 'Link' : '链接'}：${page.url || ''}`,
+    `${en ? 'Excerpt' : '摘录'}：${String(page.text || '').slice(0, 3200)}`
   ].filter(Boolean).join('\n'));
-  if (isEnglishLanguage(language)) {
+  if (en) {
     return `Answer the user's question primarily based on the recently viewed pages below. Focus on concrete differences, tradeoffs, and recommendation reasons. If the pages are insufficient, explicitly mark that part as "Inference". Structure the answer in this order: 1. key differences, 2. which one is better under what criterion, 3. who each option is for. If the user asks "which is better", explain why instead of only naming one.\n\nUser Question: ${question}\n\nRecently Viewed Pages:\n${blocks.join('\n\n')}`;
   }
   return `请优先基于以下最近浏览的页面回答用户问题，并重点比较它们的具体差异、取舍和推荐理由。如果页面信息不足以支持结论，请明确标注为“推测”。回答顺序固定为：1. 核心差异，2. 哪个在什么标准下更好以及原因，3. 各自适合什么人。如果用户问“哪个好/更好”，不要只报结论，要把“为什么更好”说清楚。\n\n用户问题：${question}\n\n最近浏览页面：\n${blocks.join('\n\n')}`;
@@ -1783,7 +1802,7 @@ async function runBrowserAutomationTask(sessionId, instruction, ctx, config, pre
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .map(m => {
       const text = EasyChatCore.extractPlainText(m.content);
-      return `${m.role === 'user' ? '用户' : 'AI'}：${text.slice(0, 100)}`;
+      return `${m.role === 'user' ? (isEnglishLanguage(language) ? 'User' : '用户') : 'AI'}：${text.slice(0, 100)}`;
     })
     .join('\n')
     .slice(0, 400);
@@ -1929,7 +1948,7 @@ async function executeAgentTask(state, options, config) {
   let route = inferDirectToolRouteFallback(userText);
   if (shouldConsiderDirectToolRouting(userText)) {
     try {
-      const rawRoute = await callOnceWithConfig(config, buildDirectToolRoutePrompt(userText, hostTab), {
+      const rawRoute = await callOnceWithConfig(config, buildDirectToolRoutePrompt(userText, hostTab, language), {
         signal,
         temperature: 0.2,
         maxTokens: 500
@@ -2032,7 +2051,7 @@ async function startAgentTask(options = {}) {
   }
 
   const config = await getEffectiveConfig();
-  if (!config.apiKey) throw new Error('请先在完整界面配置 API Key');
+  if (!config.apiKey) throw new Error(isEnglishLanguage(config.language) ? 'Please configure API Key in full UI' : '请先在完整界面配置 API Key');
 
   const existing = activeAgentTasks.get(sessionId);
   if (existing?.controller) existing.controller.abort();
@@ -2085,17 +2104,18 @@ async function startAgentTask(options = {}) {
 
 async function translateSelectionInline(text) {
   const input = String(text || '').trim();
+  const config = await getEffectiveConfig();
+  const en = isEnglishLanguage(config.language);
   if (!input) {
-    return { ok: false, error: 'empty_selection', message: '未选择内容' };
+    return { ok: false, error: 'empty_selection', message: en ? 'No content selected' : '未选择内容' };
   }
 
-  const config = await getEffectiveConfig();
   if (!config.apiKey) {
-    return { ok: false, error: 'missing_api_key', message: '请先在完整界面配置 API Key' };
+    return { ok: false, error: 'missing_api_key', message: en ? 'Please configure API Key in full UI' : '请先在完整界面配置 API Key' };
   }
 
   const baseUrl = normalizeBaseUrl(config.baseUrl);
-  const target = guessTranslateTarget(input);
+  const target = guessTranslateTarget(input, config.language);
   const body = {
     model: config.model || 'gpt-4o',
     messages: [
@@ -2105,7 +2125,9 @@ async function translateSelectionInline(text) {
       },
       {
         role: 'user',
-        content: `请将以下文字翻译成${target}，只输出译文，不要添加引号、解释、标题或额外说明：\n\n${input}`
+        content: en
+          ? `Translate the following text into ${target}. Output only the translation, no quotes, explanations, titles, or extra commentary:\n\n${input}`
+          : `请将以下文字翻译成${target}，只输出译文，不要添加引号、解释、标题或额外说明：\n\n${input}`
       }
     ],
     stream: false,
@@ -2143,7 +2165,7 @@ async function translateSelectionInline(text) {
 
     const translation = extractMessageText(data?.choices?.[0]?.message?.content).trim();
     if (!translation) {
-      return { ok: false, error: 'empty_translation', message: '模型没有返回译文' };
+      return { ok: false, error: 'empty_translation', message: en ? 'Model returned no translation' : '模型没有返回译文' };
     }
 
     return {
@@ -2155,7 +2177,7 @@ async function translateSelectionInline(text) {
     return {
       ok: false,
       error: 'request_failed',
-      message: err?.message || '翻译请求失败'
+      message: err?.message || (en ? 'Translation request failed' : '翻译请求失败')
     };
   }
 }
@@ -2202,7 +2224,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         activeAnnotateTasks.delete(sessionId);
         const jsonMatch = result.match(/\[[\s\S]*\]/);
         if (!jsonMatch) {
-          broadcastStreamEvent({ type: 'ANNOTATE_ERROR', sessionId, error: '无法解析标注结果' });
+          broadcastStreamEvent({ type: 'ANNOTATE_ERROR', sessionId, error: (cfg.language === 'en' ? 'Failed to parse annotation result' : '无法解析标注结果') });
           return;
         }
         const annotations = JSON.parse(jsonMatch[0]);
@@ -2214,7 +2236,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(err => {
         activeAnnotateTasks.delete(sessionId);
         if (err?.name === 'AbortError') return;
-        broadcastStreamEvent({ type: 'ANNOTATE_ERROR', sessionId, error: err?.message || '标注失败' });
+        broadcastStreamEvent({ type: 'ANNOTATE_ERROR', sessionId, error: err?.message || (cfg.language === 'en' ? 'Annotation failed' : '标注失败') });
       });
     sendResponse({ ok: true });
     return false;
@@ -2288,7 +2310,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'TRANSLATE_SELECTION_INLINE') {
     translateSelectionInline(msg.text || '').then(sendResponse).catch(err => {
-      sendResponse({ ok: false, error: 'request_failed', message: err?.message || '翻译请求失败' });
+      sendResponse({ ok: false, error: 'request_failed', message: err?.message || 'Translation request failed' });
     });
     return true;
   }

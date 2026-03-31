@@ -197,7 +197,14 @@ const translations = {
     noData: '暂无数据',
     sidebarUnavailable: '当前浏览器不支持扩展侧边栏',
     sidebarOpenFailed: '打开侧边栏失败',
-    fullOpenFailed: '打开完整界面失败'
+    fullOpenFailed: '打开完整界面失败',
+    switchedToModel: '已切换到 {name}',
+    connectionOk: '✅ 连接成功！回复: "{reply}"\nURL: {url}',
+    connectionFailed: '❌ 失败: {msg}\nURL: {url}',
+    networkError: '❌ 网络错误: {msg}\nURL: {url}',
+    requestFailed: '请求失败',
+    exportUser: '👤 用户',
+    exportAI: '🤖 AI'
   },
   en: {
     newChat: 'New Chat',
@@ -334,7 +341,14 @@ const translations = {
     noData: 'No data yet',
     sidebarUnavailable: 'This browser does not support extension side panel',
     sidebarOpenFailed: 'Failed to open side panel',
-    fullOpenFailed: 'Failed to open full window'
+    fullOpenFailed: 'Failed to open full window',
+    switchedToModel: 'Switched to {name}',
+    connectionOk: '✅ Connected! Reply: "{reply}"\nURL: {url}',
+    connectionFailed: '❌ Failed: {msg}\nURL: {url}',
+    networkError: '❌ Network error: {msg}\nURL: {url}',
+    requestFailed: 'Request failed',
+    exportUser: '👤 User',
+    exportAI: '🤖 AI'
   }
 };
 
@@ -782,7 +796,7 @@ function renderModelCategories(filter = '', options = {}) {
         }
 
         updateStats();
-        toast(`已切换到 ${model.name}`);
+        toast(t('switchedToModel').replace('{name}', model.name));
       });
 
       itemsDiv.appendChild(item);
@@ -1406,11 +1420,11 @@ document.getElementById('testBtn').addEventListener('click', async () => {
       body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 5, stream: false })
     });
     const json = await res.json().catch(() => null);
-    if (res.ok) showTestResult('ok', `✅ 连接成功！回复: "${json?.choices?.[0]?.message?.content || ''}"\nURL: ${baseUrl}`);
-    else showTestResult('error', `❌ 失败: ${json?.error?.message || 'HTTP ' + res.status}\nURL: ${baseUrl}`);
+    if (res.ok) showTestResult('ok', t('connectionOk').replace('{reply}', json?.choices?.[0]?.message?.content || '').replace('{url}', baseUrl));
+    else showTestResult('error', t('connectionFailed').replace('{msg}', json?.error?.message || 'HTTP ' + res.status).replace('{url}', baseUrl));
   } catch (err) {
-    showTestResult('error', `❌ 网络错误: ${err.message}\nURL: ${baseUrl}`);
-  } finally { testBtn.disabled = false; testBtn.textContent = '🔌 测试连接'; }
+    showTestResult('error', t('networkError').replace('{msg}', err.message).replace('{url}', baseUrl));
+  } finally { testBtn.disabled = false; testBtn.textContent = t('testConnection'); }
 });
 function showTestResult(type, msg) {
   const el = document.getElementById('testResult');
@@ -1436,7 +1450,7 @@ function exportChat() {
   const s = current();
   if (!s?.messages.length) { toast(t('noContentToExport')); return; }
   const lines = s.messages.map(m => {
-    const role = m.role === 'user' ? '👤 用户' : '🤖 AI';
+    const role = m.role === 'user' ? t('exportUser') : t('exportAI');
     const text = getPlainText(m.content);
     return `## ${role}\n\n${text}`;
   });
@@ -1794,6 +1808,42 @@ function updateUILanguage() {
   if (baseUrlHint) baseUrlHint.textContent = t('baseUrlHint');
   const apiKeyLabel = apiKeyInput.closest('.field')?.querySelector('label');
   if (apiKeyLabel) apiKeyLabel.textContent = 'API Key';
+
+  // Selection menu settings labels
+  const selMenuLabel = selMenuToggle?.closest('label')?.querySelector('span');
+  if (selMenuLabel) selMenuLabel.textContent = zh ? '选中菜单' : 'Selection Menu';
+  const selMenuLabels = [
+    [selMenuAsk, zh ? '问 AI' : 'Ask AI'],
+    [selMenuRewrite, zh ? '改写' : 'Rewrite'],
+    [selMenuTranslate, zh ? '翻译' : 'Translate'],
+    [selMenuSummarize, zh ? '总结' : 'Summarize'],
+    [selMenuAnnotate, zh ? '标注' : 'Annotate'],
+    [selMenuCopy, zh ? '复制' : 'Copy']
+  ];
+  selMenuLabels.forEach(([el, text]) => {
+    if (!el?.parentNode) return;
+    const label = el.parentNode;
+    const textNode = [...label.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
+    if (textNode) textNode.textContent = ' ' + text;
+  });
+
+  // Custom model placeholder
+  if (customModelInput) customModelInput.placeholder = zh ? '模型名称' : 'Model name';
+
+  // Custom search URL labels
+  const searchSelect = document.getElementById('searchEngineSelect') || searchEngineSelect;
+  if (searchSelect) {
+    const opt2 = searchSelect.querySelector('option[value="custom2"]');
+    if (opt2) opt2.textContent = zh ? '自定义 2' : 'Custom 2';
+    const opt3 = searchSelect.querySelector('option[value="custom3"]');
+    if (opt3) opt3.textContent = zh ? '自定义 3' : 'Custom 3';
+  }
+  document.querySelectorAll('.field label').forEach(label => {
+    if (label.textContent.trim() === '自定义 2 API URL' || label.textContent.trim() === 'Custom 2 API URL')
+      label.textContent = zh ? '自定义 2 API URL' : 'Custom 2 API URL';
+    if (label.textContent.trim() === '自定义 3 API URL' || label.textContent.trim() === 'Custom 3 API URL')
+      label.textContent = zh ? '自定义 3 API URL' : 'Custom 3 API URL';
+  });
 }
 
 // Stop generation
@@ -2022,7 +2072,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   clearBackgroundSyncUi();
   setBackgroundStreamControls(null);
   if (!msg.stopped) {
-    addErrorBubble(msg.error || '请求失败');
+    addErrorBubble(msg.error || t('requestFailed'));
   } else {
     toast(t('generationStopped'));
   }
@@ -2846,7 +2896,7 @@ async function send() {
       sources: [...(ctx?.meta?.contextSources || [])],
       imageAttachments: attachments.filter(a => a.type === 'image').map(a => ({
         kind: 'image',
-        label: a.name || '图片',
+        label: a.name || (currentLanguage === 'en' ? 'Image' : '图片'),
         name: a.name,
         mimeType: a.mimeType
       })),
@@ -2903,7 +2953,7 @@ async function doRequest(s, searchResult = null) {
   let msgs = s.messages.map(m => ({ role: m.role, content: toApiContent(m.content) }));
   if (config.contextLimit) msgs = msgs.slice(-parseInt(config.contextLimit));
 
-  EasyChatCore.appendSearchResultToLastUserMessage(msgs, searchResult, '联网搜索结果');
+  EasyChatCore.appendSearchResultToLastUserMessage(msgs, searchResult, currentLanguage === 'en' ? 'Web search results' : '联网搜索结果');
 
   // Prepend system prompt
   const formatInstruction = 'Always format your responses using Markdown: use ## or ### for section headings, **bold** for key terms, bullet points or numbered lists for enumerations, and ``` code blocks ``` for any code. Structure longer answers with clear headings and sections.';
@@ -2936,7 +2986,7 @@ async function doRequest(s, searchResult = null) {
       removeTyping();
       const rawContent = data.choices?.[0]?.message?.content || '';
       const content = sanitizeVisibleReasoningText(rawContent, model).trim() || extractStreamableAnswerText(rawContent, model).trim();
-      if (!content) throw new Error('模型未返回可显示正文');
+      if (!content) throw new Error(currentLanguage === 'en' ? 'Model returned no displayable content' : '模型未返回可显示正文');
 
       // Record token usage
       if (data.usage) {
@@ -3437,7 +3487,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     let apiMsgs = s.messages.map(m => ({ role: m.role, content: toApiContent(m.content) }));
     if (config.contextLimit) apiMsgs = apiMsgs.slice(-parseInt(config.contextLimit));
 
-    EasyChatCore.appendSearchResultToLastUserMessage(apiMsgs, searchResult, '联网搜索结果');
+    EasyChatCore.appendSearchResultToLastUserMessage(apiMsgs, searchResult, currentLanguage === 'en' ? 'Web search results' : '联网搜索结果');
 
     const formatInstruction = 'Always format your responses using Markdown.';
     const promptTail = [formatInstruction, EasyChatCore.buildSourceAwareInstruction(turnContext)].filter(Boolean).join('\n\n');

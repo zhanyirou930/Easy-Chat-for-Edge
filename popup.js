@@ -150,7 +150,8 @@ function containsCjk(text) {
 }
 
 function guessTranslateTarget(text) {
-  return containsCjk(text) ? '英文' : '中文';
+  const en = config.language === 'en';
+  return containsCjk(text) ? (en ? 'English' : '英文') : (en ? 'Chinese' : '中文');
 }
 
 function buildSelectionContextSource(label, selection) {
@@ -197,6 +198,7 @@ function createBrowserActionContext(tab, options = {}) {
 function createSelectionActionContext(action, selection) {
   const text = (selection?.text || '').trim();
   const L = LANG[config.language] || LANG.zh;
+  const isEn = config.language === 'en';
   const sourceMeta = (label) => ({
     contextSources: [buildSelectionContextSource(label, selection)],
     autoApplyToPage: !!selection?.editable && (action === 'rewrite' || action === 'translate'),
@@ -210,8 +212,9 @@ function createSelectionActionContext(action, selection) {
       icon: '✏️',
       label,
       meta: sourceMeta(label),
-      promptFn: (userText) =>
-        `请改写以下文字，在不改变原意的前提下让表达更清晰、自然、简洁${userText ? `。用户要求：${userText}` : ''}：\n\n${text}`
+      promptFn: (userText) => isEn
+        ? `Rewrite the following text to be clearer, more natural, and concise without changing the original meaning${userText ? `. User request: ${userText}` : ''}:\n\n${text}`
+        : `请改写以下文字，在不改变原意的前提下让表达更清晰、自然、简洁${userText ? `。用户要求：${userText}` : ''}：\n\n${text}`
     };
   }
 
@@ -223,8 +226,9 @@ function createSelectionActionContext(action, selection) {
       icon: '🌍',
       label,
       meta: sourceMeta(label),
-      promptFn: (userText) =>
-        `请将以下文字翻译成${userText || defaultTarget}，只输出译文${userText ? '，如果用户有额外要求请一并满足' : ''}：\n\n${text}`
+      promptFn: (userText) => isEn
+        ? `Translate the following text into ${userText || defaultTarget}. Output only the translation${userText ? ', and fulfill any additional user requests' : ''}:\n\n${text}`
+        : `请将以下文字翻译成${userText || defaultTarget}，只输出译文${userText ? '，如果用户有额外要求请一并满足' : ''}：\n\n${text}`
     };
   }
 
@@ -235,8 +239,9 @@ function createSelectionActionContext(action, selection) {
       icon: '🧾',
       label,
       meta: sourceMeta(label),
-      promptFn: (userText) =>
-        `请总结以下选中内容，提炼核心观点和关键信息，用简洁清晰的中文输出${userText ? `，重点关注：${userText}` : ''}：\n\n${text}`
+      promptFn: (userText) => isEn
+        ? `Summarize the following selected content, extract core ideas and key information${userText ? `, focusing on: ${userText}` : ''}:\n\n${text}`
+        : `请总结以下选中内容，提炼核心观点和关键信息，用简洁清晰的中文输出${userText ? `，重点关注：${userText}` : ''}：\n\n${text}`
     };
   }
 
@@ -246,8 +251,9 @@ function createSelectionActionContext(action, selection) {
     icon: '💬',
     label,
     meta: sourceMeta(label),
-    promptFn: (userText) =>
-      `请基于以下选中内容回答用户问题${userText ? `。用户问题：${userText}` : '。如果用户没有额外问题，请先概括要点，再给出清晰、直接的回答。'}\n\n选中内容：\n${text}`
+    promptFn: (userText) => isEn
+      ? `Answer the user's question based on the selected content below${userText ? `. User question: ${userText}` : '. If no specific question, summarize the key points first, then provide a clear answer.'}:\n\nSelected content:\n${text}`
+      : `请基于以下选中内容回答用户问题${userText ? `。用户问题：${userText}` : '。如果用户没有额外问题，请先概括要点，再给出清晰、直接的回答。'}\n\n选中内容：\n${text}`
   };
 }
 
@@ -489,7 +495,8 @@ async function restoreAnnotateForCurrentSession() {
       chrome.runtime.onMessage.removeListener(onMsg);
       setToolLoading('btnAnnotate', false);
       resetActiveStreamUi();
-      const reply = `已在页面添加 ${msg.annotations.length} 个标注气泡 📌`;
+      const _L = LANG[config.language] || LANG.zh;
+      const reply = (_L.annotationAdded || '已在页面添加 {n} 个标注气泡 📌').replace('{n}', msg.annotations.length);
       const replyBubble = addBubble('ai', '');
       renderBubble(replyBubble, reply);
       if (s) {
@@ -505,7 +512,7 @@ async function restoreAnnotateForCurrentSession() {
       chrome.runtime.onMessage.removeListener(onMsg);
       setToolLoading('btnAnnotate', false);
       resetActiveStreamUi();
-      addBubble('ai', '标注失败: ' + msg.error);
+      addBubble('ai', (LANG[config.language] || LANG.zh).annotationFailed?.replace('{msg}', msg.error) || ('标注失败: ' + msg.error));
     }
   };
   chrome.runtime.onMessage.addListener(onMsg);
@@ -579,9 +586,9 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (!msg.stopped) {
     if (backgroundSyncBubble) {
       backgroundSyncBubble.className = 'msg-bubble';
-      backgroundSyncBubble.textContent = '错误: ' + msg.error;
+      backgroundSyncBubble.textContent = ((LANG[config.language] || LANG.zh).error || '错误: {msg}').replace('{msg}', msg.error);
     } else {
-      addBubble('ai', '错误: ' + msg.error);
+      addBubble('ai', ((LANG[config.language] || LANG.zh).error || '错误: {msg}').replace('{msg}', msg.error));
     }
   }
 });
@@ -623,7 +630,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   clearBackgroundAgentUi();
   setBackgroundAgentControls(null);
   if (!msg.stopped) {
-    addBubble('ai', '错误: ' + msg.error);
+    addBubble('ai', ((LANG[config.language] || LANG.zh).error || '错误: {msg}').replace('{msg}', msg.error));
   }
 });
 
@@ -661,6 +668,56 @@ LANG.zh.recentHistoryLabel = '最近浏览记录';
 LANG.en.recentHistoryLabel = 'Recent History';
 LANG.zh.recentViewedCompareLabel = '最近浏览对比';
 LANG.en.recentViewedCompareLabel = 'Recent Viewed Compare';
+LANG.zh.annotationAdded = '已在页面添加 {n} 个标注气泡 📌';
+LANG.en.annotationAdded = 'Added {n} annotation bubbles to page 📌';
+LANG.zh.annotationFailed = '标注失败: {msg}';
+LANG.en.annotationFailed = 'Annotation failed: {msg}';
+LANG.zh.error = '错误: {msg}';
+LANG.en.error = 'Error: {msg}';
+LANG.zh.sourceLabel = '来源';
+LANG.en.sourceLabel = 'Source';
+LANG.zh.titleLabel = '标题';
+LANG.en.titleLabel = 'Title';
+LANG.zh.linkLabel = '链接';
+LANG.en.linkLabel = 'Link';
+LANG.zh.excerptLabel = '摘录';
+LANG.en.excerptLabel = 'Excerpt';
+LANG.zh.sourcesAttached = '已附加 {n} 个来源';
+LANG.en.sourcesAttached = '{n} sources attached';
+LANG.zh.noExportableChat = '没有可导出的对话';
+LANG.en.noExportableChat = 'No conversations to export';
+LANG.zh.localFileHint = '本地文件需在扩展管理页开启"允许访问文件网址"';
+LANG.en.localFileHint = 'Local files require "Allow access to file URLs" in extension settings';
+LANG.zh.screenshotFailed = '截图失败: {msg}';
+LANG.en.screenshotFailed = 'Screenshot failed: {msg}';
+LANG.zh.pleaseConfigApiKey = '请先配置 API Key';
+LANG.en.pleaseConfigApiKey = 'Please configure API Key first';
+LANG.zh.pleaseConfigApiKeyFull = '请先在完整界面配置 API Key';
+LANG.en.pleaseConfigApiKeyFull = 'Please configure API Key in full UI';
+LANG.zh.sourceAskPromptZh = '请基于以下来源回答用户问题。如果用户没有额外问题，请先概括该来源要点，再说明它的关键信息。';
+LANG.en.sourceAskPromptEn = 'Answer the user\'s question based on the following source. If no specific question, summarize the key points first.';
+LANG.zh.sourcesPromptPrefix = '请优先基于以下来源回答用户问题。如果来源信息不足以支持结论，请明确标注为"推测"。';
+LANG.en.sourcesPromptPrefix = 'Please answer based on the following sources. If the sources are insufficient, explicitly mark that part as "Speculation".';
+LANG.zh.chatRecord = '对话记录';
+LANG.en.chatRecord = 'Chat Record';
+LANG.zh.toolScreenshot = '截图对话';
+LANG.en.toolScreenshot = 'Screenshot';
+LANG.zh.toolAsk = '问 AI';
+LANG.en.toolAsk = 'Ask AI';
+LANG.zh.toolBrowserAction = '操作页面';
+LANG.en.toolBrowserAction = 'Operate Page';
+LANG.zh.toolRewrite = '改写/翻译';
+LANG.en.toolRewrite = 'Rewrite/Translate';
+LANG.zh.toolSummarize = '总结网页';
+LANG.en.toolSummarize = 'Summarize';
+LANG.zh.toolAnnotate = '自动标注';
+LANG.en.toolAnnotate = 'Auto Annotate';
+LANG.zh.selectTextHint = '选中文字后点工具按钮...';
+LANG.en.selectTextHint = 'Select text then click a tool...';
+LANG.zh.historyLabel = '历史 ☰';
+LANG.en.historyLabel = 'History ☰';
+LANG.zh.conversationHistory = '对话历史';
+LANG.en.conversationHistory = 'Conversation History';
 
 function isGrokModel(model) {
   return /^grok([-.]|$)/i.test(String(model || '').trim());
@@ -827,12 +884,14 @@ function sanitizeVisibleReasoningText(text, model = '', options = {}) {
 }
 
 function buildSourceReferenceBlock(source) {
-  const info = EasyChatCore.describeContextSource(source);
+  const L = LANG[config.language] || LANG.zh;
+  const en = config.language === 'en';
+  const info = EasyChatCore.describeContextSource(source, en);
   return [
-    `来源：${info.text}`,
-    source?.title ? `标题：${source.title}` : '',
-    source?.url ? `链接：${source.url}` : '',
-    source?.preview ? `摘录：${source.preview}` : ''
+    `${L.sourceLabel || '来源'}：${info.text}`,
+    source?.title ? `${L.titleLabel || '标题'}：${source.title}` : '',
+    source?.url ? `${L.linkLabel || '链接'}：${source.url}` : '',
+    source?.preview ? `${L.excerptLabel || '摘录'}：${source.preview}` : ''
   ].filter(Boolean).join('\n');
 }
 
@@ -869,9 +928,8 @@ function getSourcesFollowupLabel(count) {
 }
 
 function getSourcesFollowupReadyMessage(count) {
-  return config.language === 'en'
-    ? `Attached ${count} sources to composer`
-    : `已附加 ${count} 个来源`;
+  const L = LANG[config.language] || LANG.zh;
+  return (L.sourcesAttached || '已附加 {n} 个来源').replace('{n}', count);
 }
 
 function createSourcesFollowupContext(sources) {
@@ -969,25 +1027,27 @@ function buildRecentHistoryQueryCandidates(text, preferredQuery = '') {
 }
 
 function buildRecentHistoryAnswerPrompt(question, pages) {
+  const en = config.language === 'en';
   const blocks = (pages || []).map((page, index) => [
     `${index + 1}.`,
-    `标题：${page.title || ''}`,
-    `链接：${page.url || ''}`,
-    `摘录：${String(page.text || '').slice(0, 2600)}`
+    `${en ? 'Title' : '标题'}：${page.title || ''}`,
+    `${en ? 'Link' : '链接'}：${page.url || ''}`,
+    `${en ? 'Excerpt' : '摘录'}：${String(page.text || '').slice(0, 2600)}`
   ].filter(Boolean).join('\n'));
-  return config.language === 'en'
+  return en
     ? `Answer the user's question primarily based on the recently viewed pages below. If the pages are insufficient, explicitly mark that part as "Inference". When there are multiple matches, summarize the common pattern first, then point out the important differences.\n\nUser Question: ${question}\n\nRecently Viewed Pages:\n${blocks.join('\n\n')}`
     : `请优先基于以下最近浏览的页面回答用户问题。如果页面信息不足以支持结论，请明确标注为“推测”。如果匹配到多个页面，请先概括共同点，再补充重要差异。\n\n用户问题：${question}\n\n最近浏览页面：\n${blocks.join('\n\n')}`;
 }
 
 function buildRecentViewedComparePrompt(question, pages) {
+  const en = config.language === 'en';
   const blocks = (pages || []).map((page, index) => [
     `${index + 1}.`,
-    `标题：${page.title || ''}`,
-    `链接：${page.url || ''}`,
-    `摘录：${String(page.text || '').slice(0, 3200)}`
+    `${en ? 'Title' : '标题'}：${page.title || ''}`,
+    `${en ? 'Link' : '链接'}：${page.url || ''}`,
+    `${en ? 'Excerpt' : '摘录'}：${String(page.text || '').slice(0, 3200)}`
   ].filter(Boolean).join('\n'));
-  return config.language === 'en'
+  return en
     ? `Answer the user's question primarily based on the recently viewed pages below. Focus on concrete differences, tradeoffs, and recommendation reasons. If the pages are insufficient, explicitly mark that part as "Inference". Structure the answer in this order: 1. key differences, 2. which one is better under what criterion, 3. who each option is for. If the user asks "which is better", explain why instead of only naming one.\n\nUser Question: ${question}\n\nRecently Viewed Pages:\n${blocks.join('\n\n')}`
     : `请优先基于以下最近浏览的页面回答用户问题，并重点比较它们的具体差异、取舍和推荐理由。如果页面信息不足以支持结论，请明确标注为“推测”。回答顺序固定为：1. 核心差异，2. 哪个在什么标准下更好以及原因，3. 各自适合什么人。如果用户问“哪个好/更好”，不要只报结论，要把“为什么更好”说清楚。\n\n用户问题：${question}\n\n最近浏览页面：\n${blocks.join('\n\n')}`;
 }
@@ -1077,10 +1137,27 @@ function getQuickComposerPlaceholder() {
 function applyLanguage(lang) {
   const L = LANG[lang] || LANG.zh;
   document.getElementById('btnNewChat').title = L.newChat;
-  document.getElementById('historyBtn').childNodes[0].textContent = L.history + ' ';
+  document.getElementById('historyBtn').childNodes[0].textContent = (L.historyLabel || (lang === 'en' ? 'History ☰' : '历史 ☰')) + ' ';
   document.getElementById('openSidebarBtn').textContent = L.sidebarUI;
   document.getElementById('openFullBtn').textContent = L.fullUI;
   document.querySelector('.section-title').textContent = L.quickChat;
+  // Tool button names
+  const toolNames = document.querySelectorAll('.tool-name');
+  const toolKeys = ['toolScreenshot', 'toolAsk', 'toolBrowserAction', 'toolRewrite', 'toolSummarize', 'toolAnnotate'];
+  toolNames.forEach((el, i) => {
+    if (toolKeys[i] && L[toolKeys[i]]) el.textContent = L[toolKeys[i]];
+  });
+  // Status text
+  const statusText = document.getElementById('statusText');
+  if (statusText && !config.apiKey) statusText.textContent = L.noApiKey || '未配置 API Key';
+  // Drawer title
+  const drawerTitle = document.querySelector('.drawer-title');
+  if (drawerTitle) drawerTitle.textContent = L.conversationHistory || '对话历史';
+  // Select text hint
+  const selectHint = document.querySelector('.select-hint');
+  if (selectHint) selectHint.textContent = L.selectTextHint || '选中文字后点工具按钮...';
+  // Input placeholder
+  quickInput.placeholder = L.send || '发送消息...';
   if (pendingContext?.type === 'browser_action' && pendingContext.tabInfo) {
     pendingContext = createBrowserActionContext(pendingContext.tabInfo);
   } else if (pendingContext?.type === 'source_followup' && pendingContext.source) {
@@ -1149,7 +1226,7 @@ function renderMessages(msgs) {
   backgroundAgentBubble = null;
   backgroundAgentSessionId = null;
   if (!msgs.length) {
-    messagesArea.innerHTML = '<div class="empty-hint" id="emptyHint">选中文字后点工具按钮<br>或直接在这里输入</div>';
+    messagesArea.innerHTML = `<div class="empty-hint" id="emptyHint">${config.language === 'en' ? 'Select text then click a tool<br>or type here directly' : '选中文字后点工具按钮<br>或直接在这里输入'}</div>`;
     return;
   }
   msgs.forEach(m => {
@@ -1379,7 +1456,7 @@ async function sendQuick(prefillText, imageDataUrl) {
     return;
   }
   if (streaming || preparingTurn) return;
-  if (!config.apiKey) { toast('请先在完整界面配置 API Key'); return; }
+  if (!config.apiKey) { toast((LANG[config.language] || LANG.zh).pleaseConfigApiKeyFull || '请先在完整界面配置 API Key'); return; }
   preparingTurn = true;
 
   if (!currentId) newChat();
@@ -1466,8 +1543,8 @@ document.getElementById('btnExport')?.addEventListener('click', exportConversati
 function exportConversation() {
   const s = currentSession();
   const L = LANG[config.language] || LANG.zh;
-  if (!s || !s.messages.length) { toast('没有可导出的对话'); return; }
-  const lines = [`# ${s.title || '对话记录'}`, ''];
+  if (!s || !s.messages.length) { toast((LANG[config.language] || LANG.zh).noExportableChat || '没有可导出的对话'); return; }
+  const lines = [`# ${s.title || (config.language === 'en' ? 'Chat Record' : '对话记录')}`, ''];
   s.messages.forEach(m => {
     if (m.role === 'system') return;
     const role = m.role === 'assistant' ? (config.language === 'en' ? '**AI**' : '**AI**') : (config.language === 'en' ? '**You**' : '**你**');
@@ -1629,7 +1706,7 @@ async function handleContextAttach(type) {
     const text = resp?.text || '';
     if (!text) {
       const url = tab.url || '';
-      if (url.startsWith('file://')) toast('本地文件需在扩展管理页开启"允许访问文件网址"');
+      if (url.startsWith('file://')) toast((LANG[config.language] || LANG.zh).localFileHint || '本地文件需在扩展管理页开启"允许访问文件网址"');
       else toast(LANG[config.language]?.askSelectFirst || '请先在页面选中文字');
       return;
     }
@@ -1711,7 +1788,7 @@ async function handleScreenshot() {
   // Must send message to content script BEFORE closing popup
   // So: capture first, inject content script message, then close
   const { dataUrl, error } = await bgMessage({ type: 'CAPTURE_SCREENSHOT' });
-  if (error || !dataUrl) { toast('截图失败: ' + (error || '未知错误')); return; }
+  if (error || !dataUrl) { toast(((LANG[config.language] || LANG.zh).screenshotFailed || '截图失败: {msg}').replace('{msg}', error || (config.language === 'en' ? 'Unknown error' : '未知错误'))); return; }
 
   await new Promise(resolve => chrome.storage.local.set({ _screenshotFull: dataUrl }, resolve));
 
@@ -1730,7 +1807,7 @@ async function handleScreenshot() {
 async function handleAnnotate() {
   const tab = await getActiveTab();
   if (!tab) return;
-  if (!config.apiKey) { toast('请先配置 API Key'); return; }
+  if (!config.apiKey) { toast((LANG[config.language] || LANG.zh).pleaseConfigApiKey || '请先配置 API Key'); return; }
   setToolLoading('btnAnnotate', true);
   const pageText = await getPageText(tab);
   if (!pageText) { setToolLoading('btnAnnotate', false); return; }
@@ -1800,7 +1877,7 @@ async function handleAnnotate() {
       chrome.runtime.onMessage.removeListener(onAnnotateMsg);
       setToolLoading('btnAnnotate', false);
       resetActiveStreamUi();
-      addBubble('ai', '标注失败: ' + msg.error);
+      addBubble('ai', (LANG[config.language] || LANG.zh).annotationFailed?.replace('{msg}', msg.error) || ('标注失败: ' + msg.error));
     }
   };
   chrome.runtime.onMessage.addListener(onAnnotateMsg);
@@ -2962,11 +3039,11 @@ async function getPageText(tab) {
   if (!text) {
     const url = tab.url || '';
     if (url.startsWith('file://')) {
-      toast('本地文件需在扩展管理页开启"允许访问文件网址"');
+      toast((LANG[config.language] || LANG.zh).localFileHint || '本地文件需在扩展管理页开启"允许访问文件网址"');
     } else if (url.startsWith('edge://') || url.startsWith('chrome://') || url.startsWith('about:')) {
-      toast('浏览器内置页面无法获取内容');
+      toast(config.language === 'en' ? 'Cannot access browser built-in pages' : '浏览器内置页面无法获取内容');
     } else {
-      toast('无法获取页面内容');
+      toast(config.language === 'en' ? 'Cannot get page content' : '无法获取页面内容');
     }
   }
   return text;
@@ -3755,6 +3832,6 @@ async function tavilySearch(query) {
     searchResultsLabel: '搜索结果：',
     noTitleLabel: '无标题',
     webSearchResult: '搜索结果',
-    onMissingKey: () => toast('请先在完整界面配置搜索 API Key')
+    onMissingKey: () => toast(config.language === 'en' ? 'Please configure Search API Key in full UI' : '请先在完整界面配置搜索 API Key')
   });
 }
