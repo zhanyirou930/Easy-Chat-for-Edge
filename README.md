@@ -1,4 +1,4 @@
-# EasyChat for Edge
+# EasyChat for Edge — AI Chat & Browser Agent
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue.svg)](manifest.json)
@@ -7,10 +7,24 @@
 
 [中文说明](README_CN.md)
 
-A free, open-source AI chat assistant browser extension for Microsoft Edge and Google Chrome. Connect to 200+ AI models — ChatGPT, Claude, Gemini, DeepSeek, Llama, Qwen, and more — all from your browser sidebar, popup, or full window. No server required, no account needed, just bring your own API key.
+A free, open-source AI chat assistant and browser agent extension for Microsoft Edge and Google Chrome. Chat with 200+ AI models, or let the built-in agent control your browser with natural language — click, type, scroll, navigate, all hands-free. No server required, no account needed, just bring your own API key.
 
-<!-- Screenshot placeholder: replace with actual screenshot -->
-<!-- ![Screenshot](screenshots/demo.png) -->
+## Three Ways to Chat
+
+### Popup — Quick Access
+> Click the extension icon for a quick chat anytime. Perfect for fast questions, translations, and one-off tasks.
+
+![Popup](screenshots/popup.png)
+
+### Sidebar — Your Workstation
+> Pin it to the side and work alongside any webpage. Annotate, translate, summarize — all without leaving the page.
+
+![Sidebar](screenshots/sidebar.png)
+
+### Full Window — Deep Conversations
+> A dedicated full-screen workspace for long conversations, complex tasks, and focused work.
+
+![Full Window](screenshots/fullwindow.png)
 
 ## Why EasyChat?
 

@@ -1,4 +1,4 @@
-# EasyChat for Edge
+# EasyChat for Edge — AI 聊天 & 浏览器智能体
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue.svg)](manifest.json)
@@ -7,10 +7,24 @@
 
 [English](README.md)
 
-免费开源的 AI 聊天助手浏览器扩展，支持 Microsoft Edge 和 Google Chrome。一个插件连接 200+ AI 大模型 —— ChatGPT、Claude、Gemini、DeepSeek、通义千问、文心一言、Llama 等等。无需服务器，无需注册账号，填入你自己的 API Key 即可使用。
+免费开源的 AI 聊天助手 & 浏览器智能体（Browser Agent）扩展，支持 Microsoft Edge 和 Google Chrome。一个插件连接 200+ AI 大模型，还能用自然语言控制浏览器 —— 点击、输入、滚动、导航，全程无需手动操作。无需服务器，无需注册账号，填入你自己的 API Key 即可使用。
 
-<!-- 截图占位：替换为实际截图 -->
-<!-- ![截图](screenshots/demo.png) -->
+## 三种使用方式
+
+### 弹窗模式（Popup）— 随手一问
+> 点击扩展图标即可快速对话，适合快速提问、翻译、一次性任务。
+
+![Popup](screenshots/popup.png)
+
+### 侧边栏模式（Sidebar）— 你的工作站
+> 钉在浏览器侧边，边看网页边操作。标注、翻译、总结，不用离开当前页面。
+
+![Sidebar](screenshots/sidebar.png)
+
+### 全窗口模式（Full Window）— 深度交流
+> 独立的全屏工作空间，适合长对话、复杂任务和专注工作。
+
+![Full Window](screenshots/fullwindow.png)
 
 ## 为什么选 EasyChat？
 
